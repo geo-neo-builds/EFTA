@@ -10,9 +10,12 @@ from pipeline.config import config
 from pipeline.db.models import (
     Document,
     Event,
+    Exhibit,
+    ImageElement,
     Location,
     Person,
     ProcessingStatus,
+    Property,
     Victim,
     VictimIdentityMapping,
 )
@@ -188,3 +191,97 @@ class FirestoreClient:
             VictimIdentityMapping(**snap.to_dict())
             for snap in self._db.collection("victim_identity_mapping").stream()
         ]
+
+    # ---- Properties ----
+
+    def upsert_property(self, prop: Property) -> None:
+        ref = self._db.collection("properties").document(prop.id)
+        ref.set(prop.model_dump(), merge=True)
+
+    def get_property(self, property_id: str) -> Property | None:
+        snap = self._db.collection("properties").document(property_id).get()
+        if not snap.exists:
+            return None
+        return Property(**snap.to_dict())
+
+    def list_properties(self, limit: int = 100) -> list[Property]:
+        query = self._db.collection("properties").limit(limit)
+        return [Property(**snap.to_dict()) for snap in query.stream()]
+
+    def find_property_by_address(self, address: str) -> Property | None:
+        query = (
+            self._db.collection("properties")
+            .where("address", "==", address)
+            .limit(1)
+        )
+        docs = list(query.stream())
+        if not docs:
+            return None
+        return Property(**docs[0].to_dict())
+
+    def get_exhibits_for_property(self, property_id: str) -> list[Exhibit]:
+        query = (
+            self._db.collection("exhibits")
+            .where("property_id", "==", property_id)
+        )
+        return [Exhibit(**snap.to_dict()) for snap in query.stream()]
+
+    def get_documents_for_property(self, property_id: str) -> list[Document]:
+        query = (
+            self._db.collection("documents")
+            .where("property_id", "==", property_id)
+        )
+        return [Document(**snap.to_dict()) for snap in query.stream()]
+
+    # ---- Exhibits ----
+
+    def upsert_exhibit(self, exhibit: Exhibit) -> None:
+        ref = self._db.collection("exhibits").document(exhibit.id)
+        ref.set(exhibit.model_dump(), merge=True)
+
+    def get_exhibit(self, exhibit_id: str) -> Exhibit | None:
+        snap = self._db.collection("exhibits").document(exhibit_id).get()
+        if not snap.exists:
+            return None
+        return Exhibit(**snap.to_dict())
+
+    def list_exhibits(self, limit: int = 200) -> list[Exhibit]:
+        query = self._db.collection("exhibits").limit(limit)
+        return [Exhibit(**snap.to_dict()) for snap in query.stream()]
+
+    def get_documents_for_exhibit(self, exhibit_id: str) -> list[Document]:
+        query = (
+            self._db.collection("documents")
+            .where("exhibit_id", "==", exhibit_id)
+        )
+        return [Document(**snap.to_dict()) for snap in query.stream()]
+
+    # ---- Image Elements ----
+
+    def upsert_image_element(self, element: ImageElement) -> None:
+        ref = self._db.collection("image_elements").document(element.id)
+        ref.set(element.model_dump(), merge=True)
+
+    def get_elements_for_document(self, document_id: str) -> list[ImageElement]:
+        query = (
+            self._db.collection("image_elements")
+            .where("document_id", "==", document_id)
+        )
+        return [ImageElement(**snap.to_dict()) for snap in query.stream()]
+
+    def query_image_elements(
+        self,
+        category: str | None = None,
+        document_id: str | None = None,
+        notable_only: bool = False,
+        limit: int = 100,
+    ) -> list[ImageElement]:
+        query = self._db.collection("image_elements")
+        if category:
+            query = query.where("category", "==", category)
+        if document_id:
+            query = query.where("document_id", "==", document_id)
+        if notable_only:
+            query = query.where("notable", "==", True)
+        query = query.limit(limit)
+        return [ImageElement(**snap.to_dict()) for snap in query.stream()]
