@@ -16,6 +16,7 @@ import sys
 
 from pipeline.db.firestore_client import FirestoreClient
 from pipeline.db.models import ProcessingStatus
+from pipeline.vision.embeddings import EmbeddingProcessor
 from pipeline.vision.processor import VisionProcessor
 from pipeline.vision.resolver import VisionResolver
 
@@ -33,6 +34,7 @@ def main():
 
     db = FirestoreClient()
     processor = VisionProcessor()
+    embedder = EmbeddingProcessor()
     resolver = VisionResolver(firestore_client=db)
 
     # Get documents that need vision processing.
@@ -53,6 +55,12 @@ def main():
             # Run vision analysis
             text_path, results = processor.process_and_store(doc.gcs_path, doc.id)
 
+            # Generate multimodal embedding for visual similarity search.
+            # If embedding fails we still keep the vision analysis.
+            embedding = embedder.embed_document(doc.gcs_path)
+            if embedding is not None:
+                doc.embedding = embedding
+
             # Apply results to the Document
             doc.gcs_vision_path = text_path
             doc, elements = resolver.apply_to_document(doc, results)
@@ -64,13 +72,15 @@ def main():
             resolver.store_elements(elements)
 
             success_count += 1
+            embedding_status = "ok" if doc.embedding else "skipped"
             logger.info(
-                "Processed: %s — type=%s, room=%s, elements=%d, exhibit_marker=%s%s",
+                "Processed: %s — type=%s, room=%s, elements=%d, exhibit_marker=%s, embedding=%s%s",
                 doc.filename,
                 doc.document_type.value if doc.document_type else "?",
                 doc.room_type.value if doc.room_type else "?",
                 len(elements),
                 doc.is_exhibit_marker,
+                embedding_status,
                 f", label={doc.exhibit_label}" if doc.exhibit_label else "",
             )
 

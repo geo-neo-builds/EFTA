@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Optional
 
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+from google.cloud.firestore_v1.vector import Vector
 
 from pipeline.config import config
 from pipeline.db.models import (
@@ -19,6 +21,32 @@ from pipeline.db.models import (
     Victim,
     VictimIdentityMapping,
 )
+
+
+def _doc_to_firestore_dict(doc: Document) -> dict:
+    """Convert a Document to a dict ready for Firestore, wrapping vector fields."""
+    data = doc.model_dump()
+    if data.get("embedding"):
+        data["embedding"] = Vector(data["embedding"])
+    return data
+
+
+def _firestore_to_doc_dict(data: dict) -> dict:
+    """Convert a Firestore doc dict to a Document-compatible dict.
+
+    Vector fields come back from Firestore as Vector objects which Pydantic
+    can't validate; we convert them back to plain lists of floats.
+    """
+    if data is None:
+        return data
+    embedding = data.get("embedding")
+    if embedding is not None and not isinstance(embedding, list):
+        # Vector type — extract the underlying values
+        try:
+            data["embedding"] = list(embedding.value) if hasattr(embedding, "value") else list(embedding)
+        except (TypeError, AttributeError):
+            data["embedding"] = None
+    return data
 
 
 class FirestoreClient:
@@ -37,7 +65,7 @@ class FirestoreClient:
         snap = ref.get()
         if not snap.exists:
             return None
-        return Document(**snap.to_dict())
+        return Document(**_firestore_to_doc_dict(snap.to_dict()))
 
     def get_document_by_url(self, source_url: str) -> Document | None:
         query = (
@@ -48,11 +76,11 @@ class FirestoreClient:
         docs = list(query.stream())
         if not docs:
             return None
-        return Document(**docs[0].to_dict())
+        return Document(**_firestore_to_doc_dict(docs[0].to_dict()))
 
     def upsert_document(self, doc: Document) -> None:
         ref = self._db.collection("documents").document(doc.id)
-        ref.set(doc.model_dump(), merge=True)
+        ref.set(_doc_to_firestore_dict(doc), merge=True)
 
     def list_documents(
         self,
@@ -75,7 +103,33 @@ class FirestoreClient:
         if is_image is not None:
             query = query.where("is_image", "==", is_image)
         query = query.limit(limit)
-        return [Document(**snap.to_dict()) for snap in query.stream()]
+        return [
+            Document(**_firestore_to_doc_dict(snap.to_dict()))
+            for snap in query.stream()
+        ]
+
+    def find_similar_documents(
+        self,
+        query_embedding: list[float],
+        limit: int = 20,
+        distance_measure: DistanceMeasure = DistanceMeasure.COSINE,
+    ) -> list[Document]:
+        """Find documents whose embeddings are nearest to the given query vector.
+
+        Uses Firestore's native vector search. The first call will likely
+        require a vector index to be created — Firestore will return an
+        error with a link to create the index.
+        """
+        query = self._db.collection("documents").find_nearest(
+            vector_field="embedding",
+            query_vector=Vector(query_embedding),
+            distance_measure=distance_measure,
+            limit=limit,
+        )
+        return [
+            Document(**_firestore_to_doc_dict(snap.to_dict()))
+            for snap in query.stream()
+        ]
 
     # ---- Events ----
 

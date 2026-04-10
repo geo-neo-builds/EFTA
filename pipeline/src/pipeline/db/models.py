@@ -218,6 +218,10 @@ class Document(BaseModel):
     vision_summary: Optional[str] = None
     document_summary: Optional[str] = None  # set by either OCR-LLM or Vision pipeline
 
+    # Multimodal embedding (1408 floats from multimodalembedding@001)
+    # for "find visually similar photos" search
+    embedding: Optional[list[float]] = None
+
 
 # --- Event ---
 
