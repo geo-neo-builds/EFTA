@@ -37,7 +37,7 @@ HEADERS = {
 class DOJScraper(BaseScraper):
     """Scrapes documents from the DOJ Epstein disclosures page."""
 
-    def __init__(self, **kwargs):
+    def __init__(self, start_url: str = DOJ_DISCLOSURES_URL, **kwargs):
         super().__init__(**kwargs)
         # The DOJ site requires a "justiceGovAgeVerified" cookie to access files.
         # This cookie is normally set by JavaScript when clicking "Yes" on the
@@ -48,7 +48,44 @@ class DOJScraper(BaseScraper):
             follow_redirects=True,
             timeout=60.0,
         )
+        self._start_url = start_url
         logger.info("Age verification cookie set: justiceGovAgeVerified=true")
+        logger.info("Starting URL: %s", start_url)
+
+    def _fetch_with_backoff(self, url: str, max_retries: int = 5) -> httpx.Response | None:
+        """Fetch a URL with exponential backoff on 403 (rate limit).
+
+        Returns the response, or None if all retries failed.
+        """
+        delay = 2.0  # initial backoff in seconds
+        for attempt in range(max_retries):
+            try:
+                resp = self._http.get(url)
+                if resp.status_code == 200:
+                    return resp
+                if resp.status_code == 403:
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            "403 on %s (attempt %d/%d), backing off %.1fs",
+                            url, attempt + 1, max_retries, delay,
+                        )
+                        time.sleep(delay)
+                        delay *= 2  # exponential
+                        continue
+                    logger.error("403 on %s after %d attempts, giving up", url, max_retries)
+                    return None
+                # Other errors — raise to caller
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPError as e:
+                if attempt < max_retries - 1:
+                    logger.warning("HTTP error on %s: %s, retrying in %.1fs", url, e, delay)
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                logger.exception("HTTP error on %s after %d attempts", url, max_retries)
+                return None
+        return None
 
     @property
     def source_type(self) -> SourceType:
@@ -61,10 +98,17 @@ class DOJScraper(BaseScraper):
         return parsed._replace(fragment="").geturl()
 
     def discover_documents(self) -> list[dict]:
-        """Parse the DOJ disclosures page and find all PDF links."""
+        """Parse the DOJ disclosures page and find all document links.
+
+        Crawls from self._start_url, only following sub-pages whose path
+        starts with the start URL's path (so a scoped scrape stays scoped).
+        Uses exponential backoff on rate-limit errors.
+        """
         documents = []
-        urls_to_check = [DOJ_DISCLOSURES_URL]
+        urls_to_check = [self._start_url]
         visited = set()
+        # Constrain crawling to URLs under the start URL's path
+        scope_path = urlparse(self._start_url).path
 
         while urls_to_check:
             url = self._normalize_url(urls_to_check.pop(0))
@@ -73,17 +117,8 @@ class DOJScraper(BaseScraper):
             visited.add(url)
 
             logger.info("Fetching page: %s", url)
-            try:
-                resp = self._http.get(url)
-                resp.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 403:
-                    logger.warning("403 Forbidden (rate limited): %s", url)
-                else:
-                    logger.exception("Failed to fetch: %s", url)
-                continue
-            except httpx.HTTPError:
-                logger.exception("Failed to fetch: %s", url)
+            resp = self._fetch_with_backoff(url)
+            if resp is None:
                 continue
 
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -103,12 +138,16 @@ class DOJScraper(BaseScraper):
                         "title": title,
                     })
 
-                # Follow sub-pages within the epstein section
-                elif self._is_epstein_subpage(full_url) and full_url not in visited:
+                # Follow sub-pages within the configured scope
+                elif (
+                    self._is_epstein_subpage(full_url)
+                    and self._is_within_scope(full_url, scope_path)
+                    and full_url not in visited
+                ):
                     urls_to_check.append(full_url)
 
             # Be polite - don't hammer the server
-            time.sleep(1)
+            time.sleep(2)
 
         # Deduplicate by URL
         seen_urls = set()
@@ -122,13 +161,10 @@ class DOJScraper(BaseScraper):
         return unique_docs
 
     def _download(self, url: str) -> bytes | None:
-        try:
-            resp = self._http.get(url)
-            resp.raise_for_status()
-            return resp.content
-        except httpx.HTTPError:
-            logger.exception("Download failed: %s", url)
+        resp = self._fetch_with_backoff(url)
+        if resp is None:
             return None
+        return resp.content
 
     @staticmethod
     def _is_document_link(url: str) -> bool:
@@ -136,6 +172,15 @@ class DOJScraper(BaseScraper):
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
         return any(path_lower.endswith(ext) for ext in DOCUMENT_EXTENSIONS)
+
+    @staticmethod
+    def _is_within_scope(url: str, scope_path: str) -> bool:
+        """Check if a URL's path starts with the scope path.
+
+        Allows query strings (for pagination) but not unrelated sub-pages.
+        """
+        parsed = urlparse(url)
+        return parsed.path == scope_path or parsed.path.startswith(scope_path)
 
     @staticmethod
     def _is_epstein_subpage(url: str) -> bool:
