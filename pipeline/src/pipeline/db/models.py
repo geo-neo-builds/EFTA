@@ -65,6 +65,26 @@ class MotiveCategory(str, Enum):
     OTHER = "other"
 
 
+class DocumentType(str, Enum):
+    """Content-level classification of a document, independent of file format."""
+    EMAIL = "email"
+    HANDWRITTEN_NOTE = "handwritten_note"
+    LEGAL_FILING = "legal_filing"          # motions, briefs, court orders
+    COURT_TRANSCRIPT = "court_transcript"
+    DEPOSITION = "deposition"
+    CONTRACT = "contract"
+    FINANCIAL_RECORD = "financial_record"  # wire transfers, statements, invoices
+    FLIGHT_LOG = "flight_log"
+    PHONE_RECORD = "phone_record"
+    PHOTOGRAPH = "photograph"
+    AUDIO_RECORDING = "audio_recording"
+    VIDEO_RECORDING = "video_recording"
+    CORRESPONDENCE = "correspondence"      # letters, memos
+    GOVERNMENT_RECORD = "government_record"  # FBI/BOP/CBP files
+    NEWS_ARTICLE = "news_article"
+    OTHER = "other"
+
+
 # --- Document ---
 
 
@@ -84,6 +104,15 @@ class Document(BaseModel):
     last_checked_at: datetime
     version: int = 1
     error_message: Optional[str] = None
+
+    # Content classification (set during LLM extraction)
+    document_type: Optional[DocumentType] = None
+    document_type_confidence: float = 0.0
+
+    # Format flags (set during OCR)
+    has_handwriting: bool = False
+    is_audio: bool = False
+    is_image: bool = False
 
 
 # --- Event ---

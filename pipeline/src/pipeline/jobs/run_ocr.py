@@ -7,6 +7,7 @@ and Speech-to-Text on audio files.
 import json
 import logging
 import sys
+from pathlib import Path
 
 from google.cloud import pubsub_v1
 
@@ -15,6 +16,8 @@ from pipeline.db.firestore_client import FirestoreClient
 from pipeline.db.models import ProcessingStatus
 from pipeline.ocr.audio_transcriber import AudioTranscriber
 from pipeline.ocr.processor import OCRProcessor
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,13 +48,22 @@ def main():
             doc.processing_status = ProcessingStatus.OCR_PROCESSING
             db.upsert_document(doc)
 
-            # Route to appropriate processor
+            # Route to appropriate processor and set format flags
+            suffix = Path(doc.filename).suffix.lower()
             if AudioTranscriber.is_audio_file(doc.gcs_path):
                 logger.info("Transcribing audio: %s", doc.filename)
-                text_path = transcriber.transcribe_and_store(doc.gcs_path, doc.id)
+                text_path, result = transcriber.transcribe_and_store(doc.gcs_path, doc.id)
+                doc.is_audio = True
+                doc.is_image = False
+                doc.has_handwriting = False
+                doc.page_count = result.segment_count
             else:
                 logger.info("Running OCR: %s", doc.filename)
-                text_path = ocr.process_and_store(doc.gcs_path, doc.id)
+                text_path, result = ocr.process_and_store(doc.gcs_path, doc.id)
+                doc.is_audio = False
+                doc.is_image = suffix in IMAGE_EXTENSIONS
+                doc.has_handwriting = any(p.has_handwriting for p in result.pages)
+                doc.page_count = result.page_count
 
             # Update document status
             doc.processing_status = ProcessingStatus.OCR_COMPLETE

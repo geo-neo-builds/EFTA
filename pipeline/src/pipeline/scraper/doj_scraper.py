@@ -18,10 +18,17 @@ DOJ_BASE_URL = "https://www.justice.gov"
 DOJ_DISCLOSURES_URL = f"{DOJ_BASE_URL}/epstein/doj-disclosures"
 
 # File extensions we want to download as documents
-DOCUMENT_EXTENSIONS = (".pdf", ".xlsx", ".xls", ".csv", ".doc", ".docx", ".wav", ".mp3", ".mp4")
+DOCUMENT_EXTENSIONS = (
+    # Documents
+    ".pdf", ".xlsx", ".xls", ".csv", ".doc", ".docx",
+    # Audio / video
+    ".wav", ".mp3", ".mp4",
+    # Images (Document AI can OCR these directly)
+    ".jpg", ".jpeg", ".png", ".tiff", ".tif", ".gif", ".bmp",
+)
 
-# All known file extensions (documents + media) to exclude from sub-page crawling
-FILE_EXTENSIONS = DOCUMENT_EXTENSIONS + (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".zip")
+# All known file extensions (used to exclude from sub-page crawling)
+FILE_EXTENSIONS = DOCUMENT_EXTENSIONS + (".zip",)
 
 # Mimic a real browser to avoid 403
 HEADERS = {

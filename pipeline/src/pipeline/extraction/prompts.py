@@ -20,7 +20,10 @@ For each event or incident you identify, extract:
 4. WHO was involved (named people by role; victims by placeholder only)
 5. WHY / MOTIVE (categorize the apparent motive)
 
-Categories for WHAT:
+You will also classify the document itself by content type and write a
+brief 1-2 sentence summary of what the document is.
+
+Categories for WHAT (events):
 - crime: sexual abuse, trafficking, assault, fraud, conspiracy, obstruction, etc.
 - meeting: in-person meetings, gatherings, parties
 - transaction: financial transfers, payments, gifts
@@ -36,6 +39,24 @@ Categories for MOTIVE:
 - physical_arousal: sexual gratification
 - coercion: threats, intimidation, control
 - blackmail: using compromising information for leverage
+- other: anything that doesn't fit the above
+
+Categories for DOCUMENT_TYPE (the document as a whole):
+- email: an email message or printed email thread
+- handwritten_note: handwritten letters, notes, journals
+- legal_filing: court motions, briefs, orders, indictments, complaints
+- court_transcript: transcript of court proceedings
+- deposition: deposition transcript or interview record
+- contract: agreements, NDAs, settlement agreements
+- financial_record: wire transfers, bank statements, invoices, receipts
+- flight_log: flight manifests, pilot logs, flight records
+- phone_record: call logs, phone bills, message records
+- photograph: a photograph (with or without caption)
+- audio_recording: a transcribed audio recording
+- video_recording: a transcribed video recording
+- correspondence: letters, memos, faxes (typed, not handwritten)
+- government_record: FBI/BOP/CBP/DOJ internal records, reports, logs
+- news_article: published news article or press release
 - other: anything that doesn't fit the above
 
 Be thorough but precise. Only extract events that are clearly described or \
@@ -115,11 +136,15 @@ Return a JSON object with this exact structure:
       "state": "State",
       "country": "Country"
     }}
-  ]
+  ],
+  "document_type": "email|handwritten_note|legal_filing|court_transcript|deposition|contract|financial_record|flight_log|phone_record|photograph|audio_recording|video_recording|correspondence|government_record|news_article|other",
+  "document_type_confidence": 0.95,
+  "document_summary": "1-2 sentence description of what this document is and its purpose"
 }}
 
 REMEMBER: Never include real victim names. Use VICTIM_1, VICTIM_2, etc.
-If the document contains no extractable events, return empty arrays.
+If the document contains no extractable events, return empty arrays for events
+but still classify the document_type and write a document_summary.
 Respond with ONLY the JSON object, no other text.
 """
 

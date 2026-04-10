@@ -9,7 +9,7 @@ import sys
 from datetime import datetime, timezone
 
 from pipeline.db.firestore_client import FirestoreClient
-from pipeline.db.models import ProcessingStatus
+from pipeline.db.models import DocumentType, ProcessingStatus
 from pipeline.extraction.entity_resolver import EntityResolver
 from pipeline.extraction.llm_extractor import LLMExtractor
 from pipeline.ocr.text_store import TextStore
@@ -87,6 +87,13 @@ def main():
 
             if leak_count:
                 logger.warning("Redacted %d events for document %s", leak_count, doc.id)
+
+            # Apply document type classification from extraction
+            try:
+                doc.document_type = DocumentType(extraction.document_type)
+            except (ValueError, TypeError):
+                doc.document_type = DocumentType.OTHER
+            doc.document_type_confidence = extraction.document_type_confidence
 
             # Update document status
             doc.processing_status = ProcessingStatus.ANALYZED

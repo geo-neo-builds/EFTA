@@ -54,11 +54,23 @@ class FirestoreClient:
     def list_documents(
         self,
         status: ProcessingStatus | None = None,
+        document_type: str | None = None,
+        has_handwriting: bool | None = None,
+        is_audio: bool | None = None,
+        is_image: bool | None = None,
         limit: int = 100,
     ) -> list[Document]:
         query = self._db.collection("documents")
         if status:
             query = query.where("processing_status", "==", status.value)
+        if document_type:
+            query = query.where("document_type", "==", document_type)
+        if has_handwriting is not None:
+            query = query.where("has_handwriting", "==", has_handwriting)
+        if is_audio is not None:
+            query = query.where("is_audio", "==", is_audio)
+        if is_image is not None:
+            query = query.where("is_image", "==", is_image)
         query = query.limit(limit)
         return [Document(**snap.to_dict()) for snap in query.stream()]
 

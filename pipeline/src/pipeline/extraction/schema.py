@@ -65,3 +65,8 @@ class ExtractionResult(BaseModel):
     people: list[ExtractedPerson] = Field(default_factory=list)
     victims: list[ExtractedVictim] = Field(default_factory=list)
     locations: list[ExtractedLocation] = Field(default_factory=list)
+
+    # Document-level classification
+    document_type: str = "other"
+    document_type_confidence: float = 0.0
+    document_summary: str = ""

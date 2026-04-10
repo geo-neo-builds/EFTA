@@ -93,11 +93,13 @@ class AudioTranscriber:
         )
         return result
 
-    def transcribe_and_store(self, gcs_path: str, document_id: str) -> str:
+    def transcribe_and_store(
+        self, gcs_path: str, document_id: str
+    ) -> tuple[str, "TranscriptionResult"]:
         """Transcribe an audio file and store the results in GCS.
 
         Returns:
-            The GCS path where transcription results are stored.
+            A tuple of (gcs text path, TranscriptionResult).
         """
         result = self.transcribe_document(gcs_path)
 
@@ -109,7 +111,7 @@ class AudioTranscriber:
         )
 
         logger.info("Transcription stored at gs://%s/%s", config.gcs_bucket_name, output_path)
-        return output_path
+        return output_path, result
 
     @staticmethod
     def _get_encoding(path: str) -> speech.RecognitionConfig.AudioEncoding:

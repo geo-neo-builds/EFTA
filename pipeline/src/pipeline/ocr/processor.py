@@ -87,11 +87,12 @@ class OCRProcessor:
         )
         return ocr_result
 
-    def process_and_store(self, gcs_path: str, document_id: str) -> str:
+    def process_and_store(self, gcs_path: str, document_id: str) -> tuple[str, "OCRResult"]:
         """Process a document and store the OCR results in GCS.
 
         Returns:
-            The GCS path where OCR results are stored.
+            A tuple of (gcs text path, OCRResult) so callers can also
+            access metadata like page_count and has_handwriting.
         """
         result = self.process_document(gcs_path)
 
@@ -104,7 +105,7 @@ class OCRProcessor:
         )
 
         logger.info("OCR results stored at gs://%s/%s", config.gcs_bucket_name, output_path)
-        return output_path
+        return output_path, result
 
     @staticmethod
     def _get_mime_type(path: str) -> str:
