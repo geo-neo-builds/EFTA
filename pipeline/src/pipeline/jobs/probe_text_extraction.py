@@ -37,6 +37,13 @@ logging.getLogger("pypdf").setLevel(logging.ERROR)
 DEFAULT_DATA_SETS = [8, 9, 10, 11]
 DEFAULT_SAMPLES = 20
 
+# Vertex AI text-embedding-004 pricing, used for budget projection only.
+# Verify against https://cloud.google.com/vertex-ai/generative-ai/pricing before
+# committing to a run — pricing changes.
+VERTEX_EMBED_USD_PER_1M_TOKENS = 0.025
+# Rough GPT-style heuristic; good enough for ±20% budget planning.
+CHARS_PER_TOKEN = 4.0
+
 
 def main():
     args = sys.argv[1:]
@@ -189,8 +196,12 @@ def probe_data_set(
     if successes:
         avg_chars = sum(s["avg_chars_per_page"] for s in successes) / len(successes)
         avg_pages = sum(s["page_count"] for s in successes) / len(successes)
+        avg_chars_per_file = sum(s["total_chars"] for s in successes) / len(successes)
+        avg_tokens_per_file = avg_chars_per_file / CHARS_PER_TOKEN
         print(f"    Avg pages/file (text):    {avg_pages:.1f}")
         print(f"    Avg chars/page (text):    {avg_chars:.0f}")
+        print(f"    Avg chars/file (text):    {avg_chars_per_file:,.0f}")
+        print(f"    Avg est. tokens/file:     {avg_tokens_per_file:,.0f}")
 
     if failures or encrypted:
         print(f"\n  Files needing alternate processing:")
@@ -239,6 +250,8 @@ def print_summary(results: list[dict]):
 
     # Rough cost projections assuming our earlier estimates of total file counts
     estimates = {8: 10829, 9: 533750, 10: 278450, 11: 277450}
+    grand_total_embed_cost = 0.0
+    grand_total_tokens = 0.0
     for r in results:
         ds = r["data_set"]
         total = estimates.get(ds, 0)
@@ -262,12 +275,31 @@ def print_summary(results: list[dict]):
         llm_output_tokens = free_pages * 200
         llm_cost = (llm_input_tokens / 1_000_000) * 0.30 + (llm_output_tokens / 1_000_000) * 2.50
 
+        # Vertex text embedding cost projection (based on extracted text only)
+        if r["successes"]:
+            avg_chars_per_file = sum(s["total_chars"] for s in r["successes"]) / len(r["successes"])
+        else:
+            avg_chars_per_file = 0
+        projected_total_chars = free_count * avg_chars_per_file
+        projected_total_tokens = projected_total_chars / CHARS_PER_TOKEN
+        embed_cost = (projected_total_tokens / 1_000_000) * VERTEX_EMBED_USD_PER_1M_TOKENS
+
         print(f"  Data Set {ds} (~{total:,} files):")
         print(f"    Free text extraction:  {free_count:,} files (no cost)")
         print(f"    Needs OCR:             {ocr_count:,} files (~${ocr_cost:,.2f})")
+        print(f"    Vertex embeddings:     ~{projected_total_tokens / 1e6:,.1f}M tokens (~${embed_cost:,.2f})")
         print(f"    LLM extraction:        {free_count + ocr_count:,} files (~${llm_cost:,.2f})")
-        print(f"    Total:                 ~${ocr_cost + llm_cost:,.2f}")
+        print(f"    Total w/ embeddings:   ~${ocr_cost + embed_cost:,.2f}  (LLM deferred)")
         print()
+        grand_total_embed_cost += embed_cost
+        grand_total_tokens += projected_total_tokens
+
+    print(f"  {'-' * 50}")
+    print(f"  GRAND TOTAL across probed sets:")
+    print(f"    Projected tokens:      ~{grand_total_tokens / 1e6:,.1f}M")
+    print(f"    Projected embed cost:  ~${grand_total_embed_cost:,.2f}")
+    print(f"    Remaining budget:      ~$280 (assumed)")
+    print()
 
 
 if __name__ == "__main__":
