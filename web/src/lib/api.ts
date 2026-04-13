@@ -13,7 +13,7 @@ export type SearchHit = {
   sub_chunk_index: number;
   snippet: string;
   score: number;
-  match: "keyword" | "semantic";
+  match: "keyword" | "semantic" | "filter";
 };
 
 export type SearchResponse = {
@@ -75,14 +75,15 @@ export async function getStats() {
 }
 
 export async function search(opts: {
-  q: string;
+  q?: string;
   type?: SearchType;
   data_set?: number;
   entity_type?: string;
   entity_value?: string;
   limit?: number;
 }) {
-  const params = new URLSearchParams({ q: opts.q });
+  const params = new URLSearchParams();
+  if (opts.q) params.set("q", opts.q);
   if (opts.type) params.set("type", opts.type);
   if (opts.data_set !== undefined) params.set("data_set", String(opts.data_set));
   if (opts.entity_type) params.set("entity_type", opts.entity_type);

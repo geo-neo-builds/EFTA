@@ -35,12 +35,13 @@ export default function HomePage() {
 
   async function runSearch(e?: React.FormEvent) {
     e?.preventDefault();
-    if (!query.trim()) return;
+    const hasFilter = entityFilter !== null || dataSet !== null;
+    if (!query.trim() && !hasFilter) return;
     setLoading(true);
     setError(null);
     try {
       const res = await search({
-        q: query,
+        q: query.trim() || undefined,
         type: searchType,
         data_set: dataSet ?? undefined,
         entity_type: entityFilter?.type,
@@ -56,6 +57,20 @@ export default function HomePage() {
       setLoading(false);
     }
   }
+
+  // Auto-fire when a filter is toggled (entity or data_set). The search
+  // form still handles typed queries via onSubmit.
+  useEffect(() => {
+    const hasFilter = entityFilter !== null || dataSet !== null;
+    if (!hasFilter && !hasSearched) return;
+    if (!hasFilter && !query.trim()) {
+      setResults([]);
+      setHasSearched(false);
+      return;
+    }
+    runSearch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityFilter, dataSet]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-8">
@@ -150,7 +165,10 @@ export default function HomePage() {
             />
             <button
               type="submit"
-              disabled={loading || !query.trim()}
+              disabled={
+                loading ||
+                (!query.trim() && entityFilter === null && dataSet === null)
+              }
               className="rounded bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 px-4 py-2 text-white text-sm disabled:opacity-50"
             >
               {loading ? "…" : "Search"}

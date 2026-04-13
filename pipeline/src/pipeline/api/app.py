@@ -78,6 +78,58 @@ def _embed_query(text: str) -> np.ndarray:
     return _embedder.embed([text]).vectors[0]
 
 
+def _browse_by_filter(
+    store: SQLiteStore,
+    entity_type: str | None,
+    entity_value: str | None,
+    doc_filter: set[str] | None,
+    limit: int,
+) -> list[dict]:
+    """Filter-only listing used when the user selects a facet with no query.
+
+    If an entity filter is active we surface the chunks that sit on pages
+    where that entity appears (so users see the passage their filter
+    matched). Otherwise we return the first chunk of each doc in scope.
+    """
+    if entity_type and entity_value:
+        cur = store.conn.execute(
+            """SELECT c.chunk_id, c.doc_id, c.page_number, c.sub_chunk_index,
+                      substr(c.text, 1, 240) AS snippet
+               FROM entities e
+               JOIN chunks c ON c.doc_id = e.doc_id AND c.page_number = e.page_number
+               WHERE e.entity_type = ? AND e.normalized_value = ?
+               GROUP BY c.chunk_id
+               ORDER BY c.doc_id, c.page_number, c.sub_chunk_index
+               LIMIT ?""",
+            (entity_type, entity_value.lower(), limit),
+        )
+    else:
+        # data_set-only browse: first chunk per doc in scope.
+        placeholders = ",".join("?" * len(doc_filter or []))
+        cur = store.conn.execute(
+            f"""SELECT chunk_id, doc_id, page_number, sub_chunk_index,
+                       substr(text, 1, 240) AS snippet
+                FROM chunks
+                WHERE doc_id IN ({placeholders})
+                  AND sub_chunk_index = 0
+                GROUP BY doc_id
+                ORDER BY doc_id
+                LIMIT ?""",
+            (*(doc_filter or []), limit),
+        )
+
+    results = []
+    cols = None
+    for row in cur:
+        if cols is None:
+            cols = [d[0] for d in cur.getdescription()]
+        d = dict(zip(cols, row))
+        d["score"] = 0.0
+        d["match"] = "filter"
+        results.append(d)
+    return results
+
+
 # ---------- endpoints ----------
 
 
@@ -92,7 +144,7 @@ def root():
 
 @app.get("/search")
 def search(
-    q: str = Query(..., min_length=1, description="query text"),
+    q: str | None = Query(None, description="query text; optional if a filter is set"),
     type: Literal["keyword", "semantic", "hybrid"] = "hybrid",
     data_set: int | None = None,
     entity_type: str | None = Query(None, description="e.g. PERSON, GPE, ORG"),
@@ -104,8 +156,18 @@ def search(
     `entity_type`+`entity_value` together restrict results to docs that
     contain that specific entity (e.g. type=GPE, value="new york").
     `data_set` restricts to a specific data set number.
+
+    If `q` is empty but a filter is set, returns a browse-mode listing
+    of the chunks on pages where that filter matches, so users can
+    explore "all docs mentioning X" without typing a query.
     """
     store = _store_or_500()
+    has_q = bool(q and q.strip())
+    has_filter = bool((entity_type and entity_value) or data_set is not None)
+    if not has_q and not has_filter:
+        raise HTTPException(
+            400, "Provide a query (q) or a filter (data_set / entity_type+entity_value)."
+        )
 
     # Build an optional doc_id restriction from the entity + data_set filters.
     doc_filter: set[str] | None = None
@@ -117,7 +179,7 @@ def search(
         )
         doc_filter = {r[0] for r in rows}
         if not doc_filter:
-            return {"query": q, "type": type, "results": []}
+            return {"query": q or "", "type": type, "results": []}
 
     if data_set is not None:
         rows = store.conn.execute(
@@ -126,7 +188,17 @@ def search(
         ds_ids = {r[0] for r in rows}
         doc_filter = ds_ids if doc_filter is None else (doc_filter & ds_ids)
         if not doc_filter:
-            return {"query": q, "type": type, "results": []}
+            return {"query": q or "", "type": type, "results": []}
+
+    # Filter-only browse mode: no query, just list chunks matching the filter.
+    if not has_q:
+        return {
+            "query": "",
+            "type": "filter",
+            "results": _browse_by_filter(
+                store, entity_type, entity_value, doc_filter, limit,
+            ),
+        }
 
     results: list[dict] = []
 
