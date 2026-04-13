@@ -120,8 +120,10 @@ $0 instead of ~$250-400 with Vertex.
 ### Running the search API
 ```bash
 cd ~/EFTA/pipeline
-uvicorn pipeline.api.app:app --reload --port 8000
+python3 -m uvicorn pipeline.api.app:app --reload --port 8000
 ```
+(Use `python3 -m uvicorn` not bare `uvicorn` — the python.org installer
+doesn't put its scripts dir on PATH, so `uvicorn` won't be found.)
 Then `http://127.0.0.1:8000/docs` for Swagger UI, `http://127.0.0.1:8000/` for stats.
 
 Endpoints:
