@@ -36,6 +36,8 @@ local = [
                               # python.org / system Python's sqlite3 disables.
     "numpy>=1.26.0",
     "spacy>=3.7.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
 ]
 
 [build-system]
