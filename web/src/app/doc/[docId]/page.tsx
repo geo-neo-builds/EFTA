@@ -38,14 +38,14 @@ export default function DocumentPage() {
 
   if (error) {
     return (
-      <div className="rounded border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+      <div className="rounded border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950 p-4 text-sm text-red-700 dark:text-red-300">
         {error}
       </div>
     );
   }
 
   if (!meta) {
-    return <p className="text-sm text-zinc-500">Loading…</p>;
+    return <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>;
   }
 
   return (
@@ -53,7 +53,7 @@ export default function DocumentPage() {
       {/* ---------- page viewer ---------- */}
       <section>
         <header className="mb-4">
-          <div className="text-xs text-zinc-500 mb-1">
+          <div className="text-xs text-zinc-500 dark:text-zinc-400 mb-1">
             <Link href="/" className="hover:underline">
               ← all results
             </Link>
@@ -61,7 +61,7 @@ export default function DocumentPage() {
             Data Set {meta.data_set}
           </div>
           <h1 className="font-mono text-2xl tracking-tight">{meta.doc_id}</h1>
-          <p className="text-sm text-zinc-600 mt-1">
+          <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
             {meta.filename} · {meta.page_count} pages ·{" "}
             {meta.total_chars.toLocaleString()} chars
           </p>
@@ -69,7 +69,7 @@ export default function DocumentPage() {
             href={meta.source_url}
             target="_blank"
             rel="noreferrer"
-            className="text-xs text-zinc-500 hover:text-zinc-900 underline"
+            className="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 underline"
           >
             View original PDF on justice.gov
           </a>
@@ -81,15 +81,15 @@ export default function DocumentPage() {
           onChange={setCurrentPage}
         />
 
-        <article className="mt-4 rounded border border-zinc-200 bg-white p-6 min-h-[300px]">
+        <article className="mt-4 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 min-h-[300px]">
           {pageText === null ? (
-            <p className="text-sm text-zinc-400">loading page…</p>
+            <p className="text-sm text-zinc-400 dark:text-zinc-500">loading page…</p>
           ) : pageText.text.trim() === "" ? (
-            <p className="text-sm text-zinc-400 italic">
+            <p className="text-sm text-zinc-400 dark:text-zinc-500 italic">
               (this page has no extractable text)
             </p>
           ) : (
-            <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-zinc-900">
+            <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-zinc-900 dark:text-zinc-100">
               {pageText.text}
             </pre>
           )}
@@ -104,17 +104,16 @@ export default function DocumentPage() {
 
       {/* ---------- entities sidebar ---------- */}
       <aside>
-        <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+        <h2 className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider mb-2">
           Entities in this document
         </h2>
         {!entities ? (
-          <p className="text-sm text-zinc-400">loading…</p>
+          <p className="text-sm text-zinc-400 dark:text-zinc-500">loading…</p>
         ) : Object.keys(entities.entities_by_type).length === 0 ? (
-          <p className="text-sm text-zinc-400">No entities extracted yet.</p>
+          <p className="text-sm text-zinc-400 dark:text-zinc-500">No entities extracted yet.</p>
         ) : (
           <div className="space-y-4">
             {Object.entries(entities.entities_by_type).map(([type, list]) => {
-              // Unique values sorted by frequency.
               const counts = new Map<string, number>();
               for (const e of list) {
                 counts.set(e.value, (counts.get(e.value) ?? 0) + 1);
@@ -122,9 +121,9 @@ export default function DocumentPage() {
               const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1]);
               return (
                 <section key={type}>
-                  <h3 className="text-xs font-medium text-zinc-700 mb-1">
+                  <h3 className="text-xs font-medium text-zinc-700 dark:text-zinc-300 mb-1">
                     {type}{" "}
-                    <span className="text-zinc-400 font-normal">
+                    <span className="text-zinc-400 dark:text-zinc-500 font-normal">
                       ({list.length})
                     </span>
                   </h3>
@@ -132,16 +131,16 @@ export default function DocumentPage() {
                     {sorted.slice(0, 15).map(([value, count]) => (
                       <li
                         key={value}
-                        className="flex items-center justify-between text-sm text-zinc-700"
+                        className="flex items-center justify-between text-sm text-zinc-700 dark:text-zinc-300"
                       >
                         <span className="truncate">{value}</span>
-                        <span className="ml-2 shrink-0 text-xs text-zinc-400">
+                        <span className="ml-2 shrink-0 text-xs text-zinc-400 dark:text-zinc-500">
                           {count}
                         </span>
                       </li>
                     ))}
                     {sorted.length > 15 && (
-                      <li className="text-xs text-zinc-400 italic">
+                      <li className="text-xs text-zinc-400 dark:text-zinc-500 italic">
                         + {sorted.length - 15} more
                       </li>
                     )}
@@ -170,11 +169,11 @@ function PageNav({
       <button
         onClick={() => onChange(Math.max(1, current - 1))}
         disabled={current <= 1}
-        className="rounded border border-zinc-300 px-3 py-1 bg-white disabled:opacity-40"
+        className="rounded border border-zinc-300 dark:border-zinc-700 px-3 py-1 bg-white dark:bg-zinc-900 dark:text-zinc-100 disabled:opacity-40"
       >
         ← prev
       </button>
-      <span className="text-zinc-600">
+      <span className="text-zinc-600 dark:text-zinc-300">
         Page{" "}
         <input
           type="number"
@@ -185,14 +184,14 @@ function PageNav({
             const n = Number(e.target.value);
             if (n >= 1 && n <= total) onChange(n);
           }}
-          className="w-16 text-center border border-zinc-300 rounded px-1 py-0.5 mx-1"
+          className="w-16 text-center border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 dark:text-zinc-100 rounded px-1 py-0.5 mx-1"
         />
         of {total}
       </span>
       <button
         onClick={() => onChange(Math.min(total, current + 1))}
         disabled={current >= total}
-        className="rounded border border-zinc-300 px-3 py-1 bg-white disabled:opacity-40"
+        className="rounded border border-zinc-300 dark:border-zinc-700 px-3 py-1 bg-white dark:bg-zinc-900 dark:text-zinc-100 disabled:opacity-40"
       >
         next →
       </button>
