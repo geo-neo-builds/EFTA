@@ -133,6 +133,24 @@ class SQLiteStore:
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec
                 USING vec0(embedding FLOAT[{EMBED_DIM}]);
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS entities (
+                entity_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                doc_id            TEXT NOT NULL,
+                page_number       INTEGER NOT NULL,
+                entity_type       TEXT NOT NULL,
+                value             TEXT NOT NULL,
+                normalized_value  TEXT NOT NULL,
+                char_start        INTEGER,
+                char_end          INTEGER,
+                FOREIGN KEY (doc_id) REFERENCES documents(doc_id)
+            );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_entities_doc ON entities(doc_id);")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_entities_type_value "
+            "ON entities(entity_type, normalized_value);"
+        )
 
     def close(self) -> None:
         if self._conn is not None:
@@ -221,6 +239,22 @@ class SQLiteStore:
                 )
         return chunk_ids
 
+    def replace_entities(
+        self,
+        doc_id: str,
+        entities: list[tuple[int, str, str, str, int | None, int | None]],
+    ) -> int:
+        """Replace all entities for a document. Tuples: (page, type, value, normalized, start, end)."""
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM entities WHERE doc_id = ?", (doc_id,))
+            conn.executemany(
+                """INSERT INTO entities
+                       (doc_id, page_number, entity_type, value, normalized_value, char_start, char_end)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [(doc_id, pn, t, v, n, s, e) for pn, t, v, n, s, e in entities],
+            )
+        return len(entities)
+
     # ---- reads / search ----
 
     def keyword_search(self, query: str, limit: int = 20) -> list[dict]:
@@ -257,4 +291,13 @@ class SQLiteStore:
             "documents": one("SELECT COUNT(*) FROM documents"),
             "pages":     one("SELECT COUNT(*) FROM pages"),
             "chunks":    one("SELECT COUNT(*) FROM chunks"),
+            "entities":  one("SELECT COUNT(*) FROM entities"),
         }
+
+    def existing_doc_ids(self, predicate_sql: str) -> set[str]:
+        """Return doc_ids matching `SELECT doc_id FROM ... WHERE predicate_sql`.
+
+        Helper for resumable jobs. Example:
+            store.existing_doc_ids("SELECT DISTINCT doc_id FROM chunks")
+        """
+        return {row[0] for row in self.conn.execute(predicate_sql)}
