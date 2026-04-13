@@ -179,6 +179,39 @@ documents: 20   pages: 153   chunks: 206   entities: 2,250  (Set 8 sample only)
 
 **The owner cannot currently spend more money on this project.** Default to free options (pypdf) and only fall back to paid services when necessary. Always estimate cost BEFORE running expensive jobs.
 
+### Active GCP credits (2026-04-13)
+Two separate credits, each with different scopes. Always pick the right one for the job.
+
+**1. Standard GCP trial — ~$280 remaining**
+- Covers **everything on GCP**: GCS, Firestore, Cloud Run, Document AI, all Vertex AI including `text-embedding-004` and `multimodalembedding@001`, Pub/Sub, Secret Manager.
+- Use this for: infra, storage, OCR (Document AI), Set 1 image embeddings, anything *not* covered below.
+
+**2. Google Developer Program Premium GenAI Credit — $1,000, expires 2026-04-10 → 2027-04-10**
+Scoped to two services only — **Gemini API** (`AEFD-7695-64FA`) and **Vertex AI** (`C7E2-9256-1C43`) — and within those, only specific SKUs.
+- ✅ Covered:
+  - All **Gemini text/image/audio/video generation** (2.0, 2.5, 3.0, 3.1 — Flash / Flash Lite / Pro)
+  - **Gemini text embeddings** via `gemini-embedding-001` (EmbedContent + AsyncBatchEmbedContent)
+  - **Context caching** SKUs (Caching Priority / Flex / Batch / Storage)
+  - **Imagen 3/4** image generation (incl. Ultra, Upscale)
+  - **Veo 2/3** video generation
+  - **Lyria 3** audio generation
+  - **Gemini Maps Grounding**
+  - **Gemini Live / Bidi** streaming
+- ❌ NOT covered (even though they're Vertex AI):
+  - `text-embedding-004` (the standard Vertex text embed — different SKU)
+  - `multimodalembedding@001` (the 1408-dim image embedder used in the Set 1 vision pipeline)
+  - Document AI OCR
+  - Vertex AI Search / Agent Builder
+  - All infra (GCS, Firestore, Cloud Run, etc.)
+- **Authoritative SKU list:** `public/genai_credit_skus.pdf` in this repo (108 pages, saved from Google's SKU group page).
+
+**How to spend the $1,000 credit strategically**
+1. **Rich LLM extraction pass** — Gemini 2.5 Flash on a filtered subset of high-value docs for the tags spaCy can't produce (colors, artwork descriptions, shipping labels, flight manifests). This is the biggest bang for buck.
+2. **Optional embedding upgrade** — re-embed 1.1M Sets 8-11 docs with `gemini-embedding-001` (~$100-250) if we want better semantic quality than local BGE.
+3. **Context caching** — if we make many passes over the same big prompt.
+
+**When in doubt, check the SKU PDF first.** If a Vertex or Gemini operation is NOT in `public/genai_credit_skus.pdf`, it will bill against the $280 standard credit, not the $1,000 GenAI credit.
+
 ## Working with this repo
 
 ### Defaults to follow
