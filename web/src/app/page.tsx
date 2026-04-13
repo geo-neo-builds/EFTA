@@ -222,32 +222,41 @@ export default function HomePage() {
         )}
 
         <ul className="space-y-3">
-          {results.map((hit) => (
-            <li
-              key={`${hit.chunk_id}-${hit.match}`}
-              className="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 hover:border-zinc-400 dark:hover:border-zinc-600 transition"
-            >
-              <div className="flex items-baseline justify-between gap-4 mb-1">
+          {results.map((hit) => {
+            // Prefer the typed query; fall back to the entity value so the
+            // doc page can highlight the facet hit even in filter mode.
+            const hl =
+              query.trim() || entityFilter?.value || "";
+            const href =
+              `/doc/${encodeURIComponent(hit.doc_id)}` +
+              `?page=${hit.page_number}` +
+              (hl ? `&hl=${encodeURIComponent(hl)}` : "");
+            return (
+              <li key={`${hit.chunk_id}-${hit.match}`}>
                 <Link
-                  href={`/doc/${hit.doc_id}?page=${hit.page_number}`}
-                  className="font-mono text-sm text-zinc-900 dark:text-zinc-100 hover:underline"
+                  href={href}
+                  className="block rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 hover:border-zinc-400 dark:hover:border-zinc-600 hover:bg-zinc-50 dark:hover:bg-zinc-800/60 transition"
                 >
-                  {hit.doc_id}
+                  <div className="flex items-baseline justify-between gap-4 mb-1">
+                    <span className="font-mono text-sm text-zinc-900 dark:text-zinc-100">
+                      {hit.doc_id}
+                    </span>
+                    <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                      page {hit.page_number}
+                      {" · "}
+                      {hit.match}
+                      {hit.match !== "filter" &&
+                        ` · score ${hit.score.toFixed(3)}`}
+                    </span>
+                  </div>
+                  <p
+                    className="text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed"
+                    dangerouslySetInnerHTML={{ __html: hit.snippet }}
+                  />
                 </Link>
-                <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                  page {hit.page_number}
-                  {" · "}
-                  {hit.match}
-                  {" · score "}
-                  {hit.score.toFixed(3)}
-                </span>
-              </div>
-              <p
-                className="text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed"
-                dangerouslySetInnerHTML={{ __html: hit.snippet }}
-              />
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       </section>
     </div>

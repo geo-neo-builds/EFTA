@@ -17,6 +17,7 @@ export default function DocumentPage() {
   const searchParams = useSearchParams();
   const docId = params.docId;
   const initialPage = Number(searchParams.get("page") ?? 1);
+  const highlight = (searchParams.get("hl") ?? "").trim();
 
   const [meta, setMeta] = useState<DocumentMeta | null>(null);
   const [entities, setEntities] = useState<EntitiesResponse | null>(null);
@@ -89,9 +90,11 @@ export default function DocumentPage() {
               (this page has no extractable text)
             </p>
           ) : (
-            <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-zinc-900 dark:text-zinc-100">
-              {pageText.text}
-            </pre>
+            <HighlightedText
+              text={pageText.text}
+              term={highlight}
+              className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-zinc-900 dark:text-zinc-100"
+            />
           )}
         </article>
 
@@ -152,6 +155,41 @@ export default function DocumentPage() {
         )}
       </aside>
     </div>
+  );
+}
+
+function HighlightedText({
+  text,
+  term,
+  className,
+}: {
+  text: string;
+  term: string;
+  className?: string;
+}) {
+  if (!term) {
+    return <pre className={className}>{text}</pre>;
+  }
+  // Case-insensitive match. Escape regex metachars before building the RE.
+  const escaped = term.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const re = new RegExp(`(${escaped})`, "gi");
+  const parts = text.split(re);
+  const termLower = term.toLowerCase();
+  return (
+    <pre className={className}>
+      {parts.map((part, i) =>
+        part.toLowerCase() === termLower ? (
+          <mark
+            key={i}
+            className="bg-yellow-200 dark:bg-yellow-600/60 text-zinc-900 dark:text-zinc-50 rounded px-0.5"
+          >
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </pre>
   );
 }
 
