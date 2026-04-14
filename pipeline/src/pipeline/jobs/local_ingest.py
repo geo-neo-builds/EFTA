@@ -30,6 +30,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
+from pipeline.config import config  # noqa: F401 — ensures .env is loaded
 from pipeline.local_storage.paths import load_paths
 from pipeline.scraper.doj_scraper import DOJ_BASE_URL, HEADERS
 from pipeline.text_extraction.pdf_text_extractor import PDFTextExtractor
@@ -136,18 +137,34 @@ def text_json_path(text_root: Path, doc_id: str) -> Path:
     return text_root / doc_id[:8] / f"{doc_id}.json"
 
 
+def pdf_mirror_path(tc_root: Path, ds_num: int, doc_id: str) -> Path:
+    return tc_root / f"set-{ds_num}" / doc_id[:8] / f"{doc_id}.pdf"
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_bytes(data)
+    tmp.replace(path)
+
+
 def process_one(
     url: str,
     ds_num: int,
     text_root: Path,
     extractor: PDFTextExtractor,
+    tc_root: Path | None = None,
     timeout: float = 120.0,
 ) -> tuple[str, str, int]:
-    """Download + extract one file. Returns (status, doc_id, chars)."""
+    """Download + extract + (optionally) mirror one file. Returns (status, doc_id, chars)."""
     filename = url.split("/")[-1].split("?")[0]
     doc_id = filename.removesuffix(".pdf")
     out_path = text_json_path(text_root, doc_id)
-    if out_path.exists():
+    pdf_path = pdf_mirror_path(tc_root, ds_num, doc_id) if tc_root else None
+
+    json_done = out_path.exists()
+    pdf_done = pdf_path.exists() if pdf_path is not None else True
+    if json_done and pdf_done:
         return ("skip", doc_id, 0)
 
     # Each thread gets its own httpx client so connections don't collide.
@@ -163,6 +180,17 @@ def process_one(
         except Exception as e:
             return ("download_fail", doc_id, 0)
         content = resp.content
+
+    if pdf_path is not None and not pdf_done:
+        try:
+            _atomic_write_bytes(pdf_path, content)
+        except OSError as e:
+            # AFP flakiness shouldn't kill the whole run — log and continue.
+            logger.warning("mirror write failed for %s: %s", doc_id, e)
+
+    if json_done:
+        # Text JSON already present (prior run). We only needed the PDF.
+        return ("mirror_only", doc_id, 0)
 
     result = extractor.extract_from_bytes(content)
     if result.error and not result.pages:
@@ -210,6 +238,9 @@ def _atomic_write_json(path: Path, record: dict) -> None:
     tmp.replace(path)
 
 
+
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("data_set", type=int, help="DOJ data set number, e.g. 8")
@@ -223,6 +254,20 @@ def main():
     text_root = paths.text / f"set-{args.data_set}"
     text_root.mkdir(parents=True, exist_ok=True)
     url_cache = paths.staging / f"urls-set-{args.data_set}.txt"
+
+    tc_root = paths.time_capsule_root
+    if tc_root is not None:
+        if not tc_root.exists():
+            logger.warning(
+                "EFTA_TIME_CAPSULE_ROOT=%s does not exist (mount offline?). "
+                "PDFs will NOT be mirrored this run.", tc_root,
+            )
+            tc_root = None
+        else:
+            (tc_root / f"set-{args.data_set}").mkdir(parents=True, exist_ok=True)
+            logger.info("PDF mirror → %s", tc_root / f"set-{args.data_set}")
+    else:
+        logger.info("No EFTA_TIME_CAPSULE_ROOT set — raw PDFs will be discarded.")
 
     logger.info("Text archive → %s", text_root)
 
@@ -240,14 +285,14 @@ def main():
 
     extractor = PDFTextExtractor()
 
-    counts = {"ok": 0, "skip": 0, "download_fail": 0, "extract_fail": 0}
+    counts = {"ok": 0, "skip": 0, "mirror_only": 0, "download_fail": 0, "extract_fail": 0}
     total_chars = 0
     t0 = time.time()
     last_print = t0
 
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = [
-            pool.submit(process_one, url, args.data_set, text_root, extractor)
+            pool.submit(process_one, url, args.data_set, text_root, extractor, tc_root)
             for url in urls
         ]
         for i, fut in enumerate(as_completed(futures), 1):
@@ -258,9 +303,10 @@ def main():
             if now - last_print > 5.0 or i == len(futures):
                 rate = i / max(now - t0, 1e-3)
                 logger.info(
-                    "[%d/%d] ok=%d skip=%d dl_fail=%d ex_fail=%d | %.1f docs/s",
-                    i, len(futures), counts["ok"], counts["skip"],
-                    counts["download_fail"], counts["extract_fail"], rate,
+                    "[%d/%d] ok=%d mirror=%d skip=%d dl_fail=%d ex_fail=%d | %.1f docs/s",
+                    i, len(futures), counts["ok"], counts["mirror_only"],
+                    counts["skip"], counts["download_fail"], counts["extract_fail"],
+                    rate,
                 )
                 last_print = now
 
@@ -269,6 +315,7 @@ def main():
     print(f"  Ingest of Data Set {args.data_set} complete")
     print(f"  Elapsed:        {elapsed:.1f}s ({elapsed / 60:.1f} min)")
     print(f"  ok:             {counts['ok']}")
+    print(f"  mirror-only:    {counts['mirror_only']}")
     print(f"  skipped:        {counts['skip']}")
     print(f"  download fail:  {counts['download_fail']}")
     print(f"  extract fail:   {counts['extract_fail']}")
