@@ -192,7 +192,25 @@ def process_one(
         # Text JSON already present (prior run). We only needed the PDF.
         return ("mirror_only", doc_id, 0)
 
-    result = extractor.extract_from_bytes(content)
+    try:
+        result = extractor.extract_from_bytes(content)
+    except Exception as e:
+        record = {
+            "doc_id": doc_id,
+            "filename": filename,
+            "source_url": url,
+            "data_set": ds_num,
+            "page_count": 0,
+            "total_chars": 0,
+            "is_encrypted": False,
+            "has_text_layer": False,
+            "needs_ocr": True,
+            "error": f"{type(e).__name__}: {e}",
+            "pages": [],
+        }
+        _atomic_write_json(out_path, record)
+        return ("extract_fail", doc_id, 0)
+
     if result.error and not result.pages:
         # Record the failure so we don't retry forever; store a stub JSON.
         record = {
