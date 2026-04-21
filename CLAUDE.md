@@ -20,20 +20,38 @@ EFTA is an AI-powered analysis pipeline for **publicly released DOJ Epstein case
 ### Done
 - **Data Set 1 fully processed:** 3,131 photos analyzed with vision pipeline, 5 properties identified, 266 exhibits grouped, all photos have multimodal embeddings ready for similarity search.
 - **Local zero-cost pipeline built and validated** on a 20-doc Set 8 sample (2026-04-13). End-to-end works: download → pypdf → chunk → local embed (BGE-small) → SQLite (FTS5 + sqlite-vec) → entities (spaCy + regex) → FastAPI search/browse. See "Local pipeline" section below.
-- **Cost so far:** $18.43 of $300 GCP credit.
+- **Sets 8-11 fully ingested (2026-04-21).** ~1.15 million documents downloaded, text-extracted with pypdf ($0 cost), and raw PDFs archived to Time Capsule. See details below.
+- **Cost so far:** $18.43 of $300 GCP credit. Sets 8-11 ingest cost $0 (all local).
 
-### Survey results
+### Sets 8-11 ingest results (2026-04-21)
+
+| Data Set | URLs Discovered | Docs Ingested | Download Fails | Extract Fails | PDFs on TC1 | Text Chars |
+|---|---|---|---|---|---|---|
+| Set 8 | 10,494 | 10,495 | 0 | 0 | 1.8 GB | — |
+| Set 9 | 530,456 | ~530K | 8 | 33 | 95 GB | — |
+| Set 10 | 276,372 | 276,337 | 35 | 0 | 52 GB | 775M |
+| Set 11 | 328,567 | 328,540 | 28 | 0 | 27 GB | 506M |
+| **Total** | **1,145,889** | **~1,145,372** | **71** | **33** | **176 GB** | — |
+
+- **99.99% success rate** across 1.15M documents.
+- URL discovery used the Wayback Machine (`wayback_urls.py`) to bypass DOJ Akamai's paginated-listing rate limit. `--max-pages 15000` needed for Sets 9-11 (Set 8 only has ~221 listing pages).
+- Text JSONs on SSD: `/Volumes/externalSSD256/EFTA/text/set-N/`
+- Raw PDFs on Time Capsule: `/Volumes/Ryan/EFTA/pdfs/set-N/` (176 GB of 2.7 TiB used)
+- URL caches on SSD: `/Volumes/externalSSD256/EFTA/staging/urls-set-N.txt`
+- `local_ingest.py` is fully resumable: skips docs where both JSON + PDF exist. Re-running is safe and will only retry failures.
+- pypdf `PdfReadError` exceptions (malformed PDFs) are caught and recorded as `extract_fail` stubs so they don't crash the run.
+
+### Survey results (other data sets)
 - **Set 2** (~588 files): celebrity photos — Bill Clinton + Epstein together found in samples
 - **Set 3** (~98 files): multi-page evidence + 98-page photo album with section labels (ZORRO/VEGAS, LSJ AERIALS, CLOUDS, PRAGUE, PAINTING)
 - **Set 4** (~196): Palm Beach Police records (2006 fax logs)
 - **Sets 5-7** (small): photos + a few long text docs
-- **Sets 8-11** (~1.1 million files combined): native text PDFs — **100% pypdf success**, can extract text for FREE
 - **Set 12** (~200): DOJ legal memos including Maxwell prosecution memo
 
 ### Not yet built
 - The website (Next.js frontend) — API is ready for it
 - Cross-photo matcher (find which room a celebrity photo was taken in)
-- **Full** Set 8-11 bulk ingest (scaffolding is done; waiting on Akamai IP cooldown before the long overnight URL crawl — listing pages are rate-limited, file URLs are not)
+- Build search index for Sets 8-11 (chunks + embeddings + entities into SQLite) — scaffolding exists, just needs to run on the full 1.15M docs
 - LLM extraction on Sets 8-11 (deferred — too expensive without funding)
 - PersonProfile / Receipt / PhoneMessage / MediaItem schemas
 
@@ -92,9 +110,12 @@ $0 instead of ~$250-400 with Vertex.
   - `staging/urls-set-N.txt` — cached listing URLs per data set
   - `text/set-N/<prefix>/<doc_id>.json` — extracted per-page text + metadata
   - `db/efta.sqlite` — the single searchable DB
-- **Time Capsule** (`EFTA_TIME_CAPSULE_ROOT` env var, unset by default) — future
-  mirror for raw PDFs. Currently we extract text and discard the PDF; the DOJ
-  URL is preserved in the JSON so originals can be re-fetched.
+- **Time Capsule** (`EFTA_TIME_CAPSULE_ROOT` in `.env`, currently
+  `/Volumes/Ryan/EFTA/pdfs`) — raw PDF mirror. `local_ingest.py` writes each
+  downloaded PDF here atomically (tmp → rename) in a `set-N/<prefix>/<doc_id>.pdf`
+  layout mirroring the text JSONs. When the env var is unset or the mount is
+  missing at startup the job logs a warning and skips the mirror. AFP write
+  failures are logged per-file and don't fail the run.
 - Override root with `EFTA_LOCAL_ROOT` env var. See `local_storage/paths.py`.
 
 ### Modules (all local, zero-cost)
@@ -110,8 +131,9 @@ $0 instead of ~$250-400 with Vertex.
 ### Local jobs (entrypoints)
 | Command | What it does |
 |---|---|
-| `python -m pipeline.jobs.local_ingest 8 --workers 6` | Crawl DOJ listing pages for Set 8, then parallel-download + pypdf-extract → text JSON on SSD. Resumable. |
+| `python -m pipeline.jobs.local_ingest 8 --workers 6` | Parallel-download + pypdf-extract every URL in `urls-set-8.txt` → text JSON on SSD, and (if `EFTA_TIME_CAPSULE_ROOT` is set) mirror the raw PDF to the Time Capsule. Resumable: skips when JSON+PDF both exist; status `mirror_only` when only the PDF is missing. |
 | `python -m pipeline.jobs.local_ingest 8 --limit 20` | Same, but cap processed docs (use for tests). |
+| `python -m pipeline.jobs.wayback_urls 8 [--max-pages 15000]` | Discover Set-N URLs from web.archive.org when DOJ's Akamai blocks paginated listings. Writes to `staging/urls-set-N.txt`. Default `--max-pages 250` is enough for Set 8 (221 pages), **too low** for Sets 9-11 which each span 8K+ pages. |
 | `python -m pipeline.jobs.build_index 8` | Read text JSONs for Set 8, chunk + embed locally, write chunks + vectors to SQLite. Resumable. |
 | `python -m pipeline.jobs.extract_entities 8` | spaCy + regex NER over text JSONs; write entity rows to SQLite. Resumable. |
 | `python -m pipeline.jobs.build_index all` | Any of the above accept `all` to iterate every `set-*` dir. |
@@ -147,8 +169,9 @@ Endpoints:
 
 ### Current DB state (as of last validation)
 ```
-documents: 20   pages: 153   chunks: 206   entities: 2,250  (Set 8 sample only)
+documents: 20   pages: 153   chunks: 206   entities: 2,250  (Set 8 20-doc sample only)
 ```
+**Note:** The SQLite index only has a tiny Set 8 sample. The full 1.15M docs from Sets 8-11 have text JSONs on SSD but have NOT yet been chunked, embedded, or entity-extracted into SQLite. Run `build_index` and `extract_entities` to populate.
 
 ## Critical technical findings (don't re-derive these)
 
