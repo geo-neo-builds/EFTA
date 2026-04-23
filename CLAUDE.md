@@ -49,11 +49,10 @@ EFTA is an AI-powered analysis pipeline for **publicly released DOJ Epstein case
 - **Set 12** (~200): DOJ legal memos including Maxwell prosecution memo
 
 ### Not yet built
-- The website (Next.js frontend) — API is ready for it
-- Cross-photo matcher (find which room a celebrity photo was taken in)
-- Build search index for Sets 8-11 (chunks + embeddings + entities into SQLite) — scaffolding exists, just needs to run on the full 1.15M docs
-- LLM extraction on Sets 8-11 (deferred — too expensive without funding)
-- PersonProfile / Receipt / PhoneMessage / MediaItem schemas
+- Entity extraction + search index for the full 1.15M docs (see Roadmap Phase 1)
+- The website (Next.js frontend) — API is ready for it (see Roadmap Phase 2)
+- LLM extraction on high-value docs (see Roadmap Phase 3)
+- Cross-photo matcher, remaining data sets (see Roadmap Phase 4)
 
 ## Architecture
 
@@ -264,11 +263,20 @@ Scoped to two services only — **Gemini API** (`AEFD-7695-64FA`) and **Vertex A
 | `exhibits` | FBI room placards grouping sequential photos |
 | `image_elements` | Notable items (artwork, books, furniture) for filtering |
 
-## Future plans (when budget allows)
+## Roadmap (updated 2026-04-23)
 
-1. **Build the website** (Next.js) — filter UI, floating notepad widget, user accounts, tabs, timeline view, cross-document matching
-2. **Process Data Set 2** with cross-photo matcher (find which Data Set 1 room each celebrity photo was taken in)
-3. **Free text extraction on Sets 8-11** ($0)
-4. **Selective LLM extraction** on text docs — embed first, then only extract from relevant ones
-5. **Crowdfund** if needed to do full LLM extraction on the giant sets
-6. **PersonProfile schema** for tracking individuals via DL info / DOB / addresses across redacted documents
+### Phase 1 — Make the 1.15M docs searchable (free, next up)
+1. **Entity extraction** — run `extract_entities` (spaCy + regex) across Sets 8-11. Produces PERSON/ORG/GPE/DATE/EMAIL/PHONE/MONEY entities in SQLite. CPU-only, estimated ~1-2 days.
+2. **Build search index** — run `build_index` to chunk + embed (BGE-small) all docs into SQLite (FTS5 + sqlite-vec). Enables keyword + semantic + hybrid search. Need a sizing test first (~1,000 docs) to estimate time/disk for 1.15M docs on MacBook Air.
+
+### Phase 2 — Build the website
+3. **Next.js frontend** — search/browse UI with entity filters, data set selector, document viewer, timeline view. FastAPI backend is ready. Can start in parallel with Phase 1.
+
+### Phase 3 — Enrich with LLM extraction (uses $1,000 GenAI credit)
+4. **Selective Gemini extraction** — use search index to identify high-value docs, then run Gemini 2.5 Flash for tags spaCy can't produce: artwork descriptions, flight manifests, shipping labels, relationships between people. Best bang for the $1K credit.
+5. **PersonProfile schema** — track individuals via DL info / DOB / addresses across redacted documents.
+
+### Phase 4 — Cross-reference and expand
+6. **Process Data Set 2** with cross-photo matcher (find which Data Set 1 room each celebrity photo was taken in).
+7. **Process remaining data sets** (3-7, 12) as needed.
+8. **Crowdfund** if needed for full LLM extraction on the giant sets.
