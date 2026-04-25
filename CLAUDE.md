@@ -166,11 +166,12 @@ Endpoints:
 - BGE logs an `embeddings.position_ids UNEXPECTED` note on load. Harmless, ignore.
 - APSW cursors must have `getdescription()` called **before** the row iterator is exhausted (we wrap this in `_rows_as_dicts`).
 
-### Current DB state (as of last validation)
+### Current DB state (2026-04-24)
 ```
-documents: 20   pages: 153   chunks: 206   entities: 2,250  (Set 8 20-doc sample only)
+entities: 34,187,107   (all 1.15M docs from Sets 8-11)
+documents: 193   pages: 544   chunks: 206   (Set 8 20-doc sample only — build_index not yet run at scale)
 ```
-**Note:** The SQLite index only has a tiny Set 8 sample. The full 1.15M docs from Sets 8-11 have text JSONs on SSD but have NOT yet been chunked, embedded, or entity-extracted into SQLite. Run `build_index` and `extract_entities` to populate.
+**Entity extraction complete.** 34.1M entities (PERSON/ORG/GPE/DATE/EMAIL/PHONE/MONEY) across 1,144,776 docs. DB is 3.7 GB on SSD. Still need to run `build_index` to chunk + embed all docs for keyword/semantic search.
 
 ## Critical technical findings (don't re-derive these)
 
@@ -265,9 +266,9 @@ Scoped to two services only — **Gemini API** (`AEFD-7695-64FA`) and **Vertex A
 
 ## Roadmap (updated 2026-04-23)
 
-### Phase 1 — Make the 1.15M docs searchable (free, next up)
-1. **Entity extraction** — run `extract_entities` (spaCy + regex) across Sets 8-11. Produces PERSON/ORG/GPE/DATE/EMAIL/PHONE/MONEY entities in SQLite. CPU-only, estimated ~1-2 days.
-2. **Build search index** — run `build_index` to chunk + embed (BGE-small) all docs into SQLite (FTS5 + sqlite-vec). Enables keyword + semantic + hybrid search. Need a sizing test first (~1,000 docs) to estimate time/disk for 1.15M docs on MacBook Air.
+### Phase 1 — Make the 1.15M docs searchable (free, in progress)
+1. ~~**Entity extraction**~~ — **DONE (2026-04-24).** 34.1M entities across 1,144,776 docs. 19.6 hours, 3.7 GB DB.
+2. **Build search index** — run `build_index` to chunk + embed (BGE-small) all docs into SQLite (FTS5 + sqlite-vec). Enables keyword + semantic + hybrid search. **Next up — sizing test needed first.**
 
 ### Phase 2 — Build the website
 3. **Next.js frontend** — search/browse UI with entity filters, data set selector, document viewer, timeline view. FastAPI backend is ready. Can start in parallel with Phase 1.

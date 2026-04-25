@@ -33,10 +33,14 @@ class LocalEmbedder:
     download hundreds of MB until we actually embed something.
     """
 
-    def __init__(self, model_name: str = DEFAULT_MODEL, device: str | None = None):
+    def __init__(self, model_name: str = DEFAULT_MODEL, device: str | None = None,
+                 eager: bool = False):
         self.model_name = model_name
         self.device = device  # None → auto (mps/cuda/cpu)
         self._model = None
+        if eager:
+            self._ensure_loaded()
+            self._warmup()
 
     def _ensure_loaded(self):
         if self._model is not None:
@@ -51,6 +55,10 @@ class LocalEmbedder:
         logger.info("Loading embedding model %s ...", self.model_name)
         self._model = SentenceTransformer(self.model_name, device=self.device)
         logger.info("Model ready (device=%s).", self._model.device)
+
+    def _warmup(self):
+        """Run a throwaway encode to force MPS kernel compilation."""
+        self._model.encode(["warmup"], normalize_embeddings=True, convert_to_numpy=True)
 
     def embed(
         self,

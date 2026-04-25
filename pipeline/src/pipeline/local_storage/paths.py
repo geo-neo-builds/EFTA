@@ -5,6 +5,7 @@ so the rest of the code never hardcodes a path.
 
 Override any of these by setting the matching env var in `.env`:
   EFTA_LOCAL_ROOT           default: /Volumes/externalSSD256/EFTA
+  EFTA_DB_DIR               default: <EFTA_LOCAL_ROOT>/db (override to put DB on internal drive)
   EFTA_TIME_CAPSULE_ROOT    default: unset (skip mirror when unset)
 """
 
@@ -35,11 +36,13 @@ class LocalPaths:
 def load_paths() -> LocalPaths:
     root = Path(os.getenv("EFTA_LOCAL_ROOT", str(DEFAULT_LOCAL_ROOT)))
     tc = os.getenv("EFTA_TIME_CAPSULE_ROOT")
+    db_override = os.getenv("EFTA_DB_DIR")
+    db_dir = Path(db_override) if db_override else root / "db"
     return LocalPaths(
         root=root,
         staging=root / "staging",
         text=root / "text",
-        db=root / "db",
-        db_file=root / "db" / "efta.sqlite",
+        db=db_dir,
+        db_file=db_dir / "efta.sqlite",
         time_capsule_root=Path(tc) if tc else None,
     )

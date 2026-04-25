@@ -20,6 +20,7 @@ import logging
 import time
 from pathlib import Path
 
+from pipeline.config import config  # noqa: F401 — ensures .env is loaded
 from pipeline.embeddings.chunker import chunk_document
 from pipeline.embeddings.local_embedder import LocalEmbedder
 from pipeline.local_storage.paths import load_paths
@@ -59,17 +60,15 @@ def main():
     already_indexed = store.existing_doc_ids("SELECT DISTINCT doc_id FROM chunks")
     logger.info("%d docs already indexed", len(already_indexed))
 
-    text_files = list(iter_text_jsons(paths.text, args.data_set))
-    logger.info("Found %d text JSONs to consider", len(text_files))
+    embedder = LocalEmbedder(eager=True)
 
-    embedder = LocalEmbedder()
-
-    # Accumulate chunks across documents so we can amortize model calls
-    # by embedding in large batches rather than one doc at a time.
     buf_chunks = []
-    buf_doc_ranges: list[tuple[str, int, int]] = []  # (doc_id, start, end) in buf_chunks
+    buf_doc_ranges: list[tuple[str, int, int]] = []
     processed = 0
+    skipped = 0
+    total_chunks = 0
     t0 = time.time()
+    last_log = t0
 
     def flush():
         nonlocal buf_chunks, buf_doc_ranges
@@ -79,13 +78,11 @@ def main():
         batch = embedder.embed(texts, batch_size=EMBED_BATCH, show_progress=False)
         vectors = batch.vectors
         for (doc_id, start, end) in buf_doc_ranges:
-            chunks_slice = buf_chunks[start:end]
-            vec_slice = vectors[start:end]
-            store.insert_chunks(chunks_slice, vec_slice)
+            store.insert_chunks(buf_chunks[start:end], vectors[start:end])
         buf_chunks = []
         buf_doc_ranges = []
 
-    for tf in text_files:
+    for tf in iter_text_jsons(paths.text, args.data_set):
         if args.limit and processed >= args.limit:
             break
 
@@ -97,6 +94,7 @@ def main():
 
         doc_id = record["doc_id"]
         if doc_id in already_indexed:
+            skipped += 1
             continue
         if not record.get("has_text_layer") or not record.get("pages"):
             continue
@@ -122,16 +120,25 @@ def main():
         buf_chunks.extend(chunks)
         buf_doc_ranges.append((doc_id, start, len(buf_chunks)))
         processed += 1
+        total_chunks += len(chunks)
 
         if len(buf_chunks) >= 512:
             flush()
+
+        now = time.time()
+        if now - last_log >= 5.0:
+            rate = processed / max(now - t0, 1e-3)
             logger.info(
-                "[%d] flushed | elapsed=%.1fs", processed, time.time() - t0,
+                "[%d docs, %d chunks, %d skipped] %.1f docs/s | elapsed=%.1fs",
+                processed, total_chunks, skipped, rate, now - t0,
             )
+            last_log = now
 
     flush()
-    logger.info("Done. %d docs indexed in %.1fs. stats=%s",
-                processed, time.time() - t0, store.stats())
+    elapsed = time.time() - t0
+    logger.info("Done. %d docs, %d chunks indexed in %.1fs (%.1f docs/s). stats=%s",
+                processed, total_chunks, elapsed, processed / max(elapsed, 1e-3),
+                store.stats())
     store.close()
 
 
