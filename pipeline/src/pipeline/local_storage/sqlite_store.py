@@ -196,6 +196,47 @@ class SQLiteStore:
                 UNIQUE(user_id, doc_id, page_number)
             );
         """)
+        # Set 1 image analysis tables
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS properties (
+                property_id  TEXT PRIMARY KEY,
+                name         TEXT NOT NULL,
+                nickname     TEXT,
+                address      TEXT,
+                city         TEXT,
+                state        TEXT,
+                country      TEXT,
+                photo_count  INTEGER DEFAULT 0,
+                exhibit_count INTEGER DEFAULT 0
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS exhibits (
+                exhibit_id   TEXT PRIMARY KEY,
+                label        TEXT NOT NULL,
+                property_id  TEXT REFERENCES properties(property_id),
+                room_type    TEXT,
+                photo_count  INTEGER DEFAULT 0,
+                location_address TEXT,
+                case_id      TEXT,
+                photo_date   TEXT
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS image_elements (
+                element_id   TEXT PRIMARY KEY,
+                doc_id       TEXT NOT NULL,
+                category     TEXT NOT NULL,
+                description  TEXT,
+                notable      INTEGER DEFAULT 0,
+                title        TEXT,
+                creator      TEXT,
+                quantity     INTEGER DEFAULT 1,
+                confidence   REAL
+            );
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_image_elements_doc ON image_elements(doc_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_image_elements_cat ON image_elements(category);")
 
     def close(self) -> None:
         if self._conn is not None:

@@ -395,11 +395,11 @@ def facets(top_n: int = Query(25, ge=1, le=200)):
     skip the per-type top values. The sidebar uses these for filter buttons.
     """
     return {
-        "data_sets": [8, 9, 10, 11],
+        "data_sets": [1, 8, 9, 10, 11],
         "doc_types": [
             "calendar_event", "court_filing", "court_order", "email",
             "evidence_log", "fbi_report", "financial", "letter", "memo",
-            "other", "police_report", "transcript", "witness_form",
+            "other", "photograph", "police_report", "transcript", "witness_form",
         ],
         "entity_types": [
             "DATE", "EMAIL", "EVENT", "FAC", "GPE", "LOC",

@@ -168,17 +168,20 @@ Endpoints:
 
 ### Current DB state (2026-04-29)
 ```
-documents:  1,068,106
-pages:      2,235,584
-chunks:     2,866,071   (768-dim Gemini embeddings)
-entities:  34,187,107
-DB size:   20 GB (on internal NVMe at ~/EFTA/db/efta.sqlite)
+documents:      1,071,237   (Sets 8-11 text + Set 1 photos)
+pages:          2,241,485
+chunks:         2,895,171   (768-dim Gemini embeddings for Sets 8-11; FTS-only for Set 1)
+entities:      34,187,107
+image_elements:    27,772   (Set 1: artwork, furniture, books, etc.)
+properties:            5   (Epstein locations)
+exhibits:            266   (FBI room groups)
+DB size:          ~20 GB   (internal NVMe at ~/EFTA/db/efta.sqlite)
 ```
-**Phase 1 complete.** All 1.15M docs from Sets 8-11 are fully searchable:
-- **Entity extraction** (spaCy + regex): 34.1M entities — PERSON/ORG/GPE/DATE/EMAIL/PHONE/MONEY
-- **Search index** (Gemini embedding-001, 768-dim via Vertex AI): 2.87M chunks with FTS5 keyword search + sqlite-vec semantic search
-- Embedding cost: ~$42 of $1,000 GenAI credit (22.8 hours at 11.3 docs/s)
+**Fully searchable.** Sets 1, 8-11 indexed. Keyword search (FTS5), semantic search (Gemini 768-dim), entity filtering, doc type filtering, date range filtering. Auth + notepad + bookmarks operational.
+- Embedding cost so far: ~$42 of $1,000 GenAI credit
 - DB location: internal NVMe (`EFTA_DB_DIR=/Users/ryanslay/EFTA/db`). Copy back to SSD when deploying.
+- Doc type classifier run on all 1M+ text docs (rule-based: email, court_filing, transcript, memo, etc.)
+- Set 1 Firestore import complete (3,131 photos, 27,772 image elements, 5 properties, 266 exhibits)
 
 ## Critical technical findings (don't re-derive these)
 
@@ -280,14 +283,34 @@ Scoped to two services only — **Gemini API** (`AEFD-7695-64FA`) and **Vertex A
    - `build_index --reset` drops chunk/vector tables for re-embedding with a different model
    - Vertex AI quota: ~10-12 docs/s sustainable; faster triggers per-minute token quota (429s auto-retry)
 
-### Phase 2 — Build the website
-3. **Next.js frontend** — search/browse UI with entity filters, data set selector, document viewer, timeline view. FastAPI backend is ready. Can start in parallel with Phase 1.
+### Phase 2 — Build the website — DONE (2026-04-29)
+3. ~~**Next.js frontend**~~ — **DONE.** Features built:
+   - Search with keyword/semantic/hybrid modes, URL-persisted state, "Load more" pagination
+   - Document viewer with page navigation, text highlighting, per-page bookmarking
+   - Auth system: magic link login via Resend (eftanow.com), session cookies, user accounts
+   - Draggable research notepad with persistent notes + bookmarks (per-user in SQLite)
+   - Timeline view (chronological docs by DATE entities)
+   - Filters: document type, date range, data set, entity type/value
+   - Similar documents button on search results
+   - Dark/light mode, responsive layout
+   - Set 1 photo data imported from Firestore (3,131 photos, 27,772 image elements, 5 properties, 266 exhibits)
+   - Document type classifier: 1M+ docs classified (email, court_filing, transcript, memo, photograph, etc.)
 
-### Phase 3 — Enrich with LLM extraction (uses $1,000 GenAI credit)
-4. **Selective Gemini extraction** — use search index to identify high-value docs, then run Gemini 2.5 Flash for tags spaCy can't produce: artwork descriptions, flight manifests, shipping labels, relationships between people. Best bang for the $1K credit.
-5. **PersonProfile schema** — track individuals via DL info / DOB / addresses across redacted documents.
+### Phase 3 — Process remaining data sets (next up)
+4. **Download + index Sets 2-7, 12** (~1,200 files total, ~$1-2 cost):
+   - Sets 4, 12: text-heavy (pypdf, $0)
+   - Sets 2, 3, 5-7: photo-heavy (need vision pipeline, ~$1 from Gemini credit)
+   - Need Wayback URL discovery first (not sequentially numbered like Sets 1-2)
+   - Need Time Capsule + SSD connected for downloads
+5. **Download Set 1 PDFs to Time Capsule** — 3,158 photos, sequential URLs, few minutes. Enables inline image viewing.
+6. **Google OAuth** — add "Sign in with Google" alongside magic link login.
 
-### Phase 4 — Cross-reference and expand
-6. **Process Data Set 2** with cross-photo matcher (find which Data Set 1 room each celebrity photo was taken in).
-7. **Process remaining data sets** (3-7, 12) as needed.
-8. **Crowdfund** if needed for full LLM extraction on the giant sets.
+### Phase 4 — Enrich with LLM extraction (uses $1,000 GenAI credit)
+7. **Selective Gemini extraction** — use search index to identify high-value docs, then run Gemini 2.5 Flash for tags spaCy can't produce: artwork descriptions, flight manifests, shipping labels, relationships between people.
+8. **Reduce "other" doc types** — use Gemini to classify the ~100K docs the rule-based classifier couldn't categorize (~$5-10).
+9. **PersonProfile schema** — track individuals via DL info / DOB / addresses across redacted documents.
+
+### Phase 5 — Cross-reference and deploy
+10. **Cross-photo matcher** — find which Data Set 1 room each Set 2 celebrity photo was taken in.
+11. **Deploy publicly** — Vercel (frontend) + Cloud Run (backend), or similar.
+12. **Crowdfund** if needed for full LLM extraction on the giant sets.
