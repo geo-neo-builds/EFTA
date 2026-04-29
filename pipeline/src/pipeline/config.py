@@ -22,6 +22,10 @@ class Config:
     victim_encryption_key_secret: str = os.getenv(
         "VICTIM_ENCRYPTION_KEY_SECRET", "victim-encryption-key"
     )
+    # Embedding configuration
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    embed_backend: str = os.getenv("EMBED_BACKEND", "gemini")  # "gemini" | "local"
+    embed_dim: int = int(os.getenv("EMBED_DIM", "768"))
 
 
 config = Config()

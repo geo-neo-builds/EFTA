@@ -1,7 +1,7 @@
 """Build the chunk + embedding index from text JSONs already on disk.
 
 Reads every `<SSD>/EFTA/text/set-<N>/.../<doc_id>.json` produced by
-`local_ingest`, chunks each page, runs them through BGE-small locally,
+`local_ingest`, chunks each page, embeds them (Gemini API or local BGE),
 and writes documents/pages/chunks/embeddings to the SQLite DB.
 
 Resumable: docs already present in `chunks` are skipped.
@@ -9,7 +9,8 @@ Resumable: docs already present in `chunks` are skipped.
 Usage:
     python -m pipeline.jobs.build_index 8
     python -m pipeline.jobs.build_index 8 --limit 100
-    python -m pipeline.jobs.build_index all        # process every set-* dir
+    python -m pipeline.jobs.build_index all
+    python -m pipeline.jobs.build_index all --reset   # re-embed with new model
 """
 
 from __future__ import annotations
@@ -20,9 +21,9 @@ import logging
 import time
 from pathlib import Path
 
-from pipeline.config import config  # noqa: F401 — ensures .env is loaded
+from pipeline.config import config
+from pipeline.embeddings import get_embedder
 from pipeline.embeddings.chunker import chunk_document
-from pipeline.embeddings.local_embedder import LocalEmbedder
 from pipeline.local_storage.paths import load_paths
 from pipeline.local_storage.sqlite_store import DocumentRecord, SQLiteStore
 
@@ -30,10 +31,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
-# How many chunks we embed per model.encode() call. Bigger batches are
-# more efficient on MPS/CUDA up to a point; 128 is a safe default on
-# Apple Silicon.
-EMBED_BATCH = 128
+EMBED_BATCH = 100  # texts per API call (Gemini optimal; also fine for local)
 
 
 def iter_text_jsons(text_root: Path, set_filter: str):
@@ -51,16 +49,22 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("data_set", help="data set number, e.g. 8, or 'all'")
     parser.add_argument("--limit", type=int, default=None, help="cap docs processed")
+    parser.add_argument("--reset", action="store_true",
+                        help="drop all chunks/vectors and re-index from scratch")
     args = parser.parse_args()
 
     paths = load_paths()
     paths.ensure()
-    store = SQLiteStore(paths.db_file)
+    store = SQLiteStore(paths.db_file, embed_dim=config.embed_dim)
+
+    if args.reset:
+        store.reset_chunks()
 
     already_indexed = store.existing_doc_ids("SELECT DISTINCT doc_id FROM chunks")
     logger.info("%d docs already indexed", len(already_indexed))
 
-    embedder = LocalEmbedder(eager=True)
+    embedder = get_embedder()
+    logger.info("Embedder: %s (dim=%d)", config.embed_backend, config.embed_dim)
 
     buf_chunks = []
     buf_doc_ranges: list[tuple[str, int, int]] = []
@@ -122,11 +126,11 @@ def main():
         processed += 1
         total_chunks += len(chunks)
 
-        if len(buf_chunks) >= 512:
+        if len(buf_chunks) >= 2000:
             flush()
 
         now = time.time()
-        if now - last_log >= 5.0:
+        if now - last_log >= 10.0:
             rate = processed / max(now - t0, 1e-3)
             logger.info(
                 "[%d docs, %d chunks, %d skipped] %.1f docs/s | elapsed=%.1fs",

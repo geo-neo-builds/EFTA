@@ -28,7 +28,6 @@ from pathlib import Path
 import numpy as np
 
 from pipeline.embeddings.chunker import Chunk
-from pipeline.embeddings.local_embedder import EMBED_DIM
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +56,9 @@ def _rows_as_dicts(cursor) -> list[dict]:
 class SQLiteStore:
     """Handles schema creation, inserts, and search queries."""
 
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, embed_dim: int = 768):
         self.db_path = db_path
+        self.embed_dim = embed_dim
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = None
 
@@ -131,7 +131,7 @@ class SQLiteStore:
         """)
         conn.execute(f"""
             CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec
-                USING vec0(embedding FLOAT[{EMBED_DIM}]);
+                USING vec0(embedding FLOAT[{self.embed_dim}]);
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS entities (
@@ -156,6 +156,25 @@ class SQLiteStore:
         if self._conn is not None:
             self._conn.close()
             self._conn = None
+
+    def reset_chunks(self) -> None:
+        """Drop all chunk/vector/FTS data for full re-indexing with a new model."""
+        conn = self.conn
+        conn.execute("DROP TABLE IF EXISTS chunks_vec")
+        conn.execute("DROP TABLE IF EXISTS chunks_fts")
+        conn.execute("DELETE FROM chunks")
+        conn.execute("DELETE FROM documents")
+        conn.execute("DELETE FROM pages")
+        # Recreate virtual tables
+        conn.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts
+                USING fts5(text, content='chunks', content_rowid='chunk_id');
+        """)
+        conn.execute(f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS chunks_vec
+                USING vec0(embedding FLOAT[{self.embed_dim}]);
+        """)
+        logger.info("Reset chunks/documents/pages/FTS/vec tables (embed_dim=%d)", self.embed_dim)
 
     # ---- transactions ----
 
@@ -202,9 +221,9 @@ class SQLiteStore:
             raise ValueError(
                 f"chunks ({len(chunks)}) and vectors ({vectors.shape[0]}) length mismatch"
             )
-        if vectors.shape[1] != EMBED_DIM:
+        if vectors.shape[1] != self.embed_dim:
             raise ValueError(
-                f"expected {EMBED_DIM}-dim vectors, got {vectors.shape[1]}"
+                f"expected {self.embed_dim}-dim vectors, got {vectors.shape[1]}"
             )
         vectors = vectors.astype(np.float32)
 

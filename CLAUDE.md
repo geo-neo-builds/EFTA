@@ -49,7 +49,7 @@ EFTA is an AI-powered analysis pipeline for **publicly released DOJ Epstein case
 - **Set 12** (~200): DOJ legal memos including Maxwell prosecution memo
 
 ### Not yet built
-- Entity extraction + search index for the full 1.15M docs (see Roadmap Phase 1)
+- ~~Entity extraction + search index~~ — **DONE** (see Roadmap Phase 1)
 - The website (Next.js frontend) — API is ready for it (see Roadmap Phase 2)
 - LLM extraction on high-value docs (see Roadmap Phase 3)
 - Cross-photo matcher, remaining data sets (see Roadmap Phase 4)
@@ -166,12 +166,19 @@ Endpoints:
 - BGE logs an `embeddings.position_ids UNEXPECTED` note on load. Harmless, ignore.
 - APSW cursors must have `getdescription()` called **before** the row iterator is exhausted (we wrap this in `_rows_as_dicts`).
 
-### Current DB state (2026-04-24)
+### Current DB state (2026-04-29)
 ```
-entities: 34,187,107   (all 1.15M docs from Sets 8-11)
-documents: 193   pages: 544   chunks: 206   (Set 8 20-doc sample only — build_index not yet run at scale)
+documents:  1,068,106
+pages:      2,235,584
+chunks:     2,866,071   (768-dim Gemini embeddings)
+entities:  34,187,107
+DB size:   20 GB (on internal NVMe at ~/EFTA/db/efta.sqlite)
 ```
-**Entity extraction complete.** 34.1M entities (PERSON/ORG/GPE/DATE/EMAIL/PHONE/MONEY) across 1,144,776 docs. DB is 3.7 GB on SSD. Still need to run `build_index` to chunk + embed all docs for keyword/semantic search.
+**Phase 1 complete.** All 1.15M docs from Sets 8-11 are fully searchable:
+- **Entity extraction** (spaCy + regex): 34.1M entities — PERSON/ORG/GPE/DATE/EMAIL/PHONE/MONEY
+- **Search index** (Gemini embedding-001, 768-dim via Vertex AI): 2.87M chunks with FTS5 keyword search + sqlite-vec semantic search
+- Embedding cost: ~$42 of $1,000 GenAI credit (22.8 hours at 11.3 docs/s)
+- DB location: internal NVMe (`EFTA_DB_DIR=/Users/ryanslay/EFTA/db`). Copy back to SSD when deploying.
 
 ## Critical technical findings (don't re-derive these)
 
@@ -266,9 +273,12 @@ Scoped to two services only — **Gemini API** (`AEFD-7695-64FA`) and **Vertex A
 
 ## Roadmap (updated 2026-04-23)
 
-### Phase 1 — Make the 1.15M docs searchable (free, in progress)
-1. ~~**Entity extraction**~~ — **DONE (2026-04-24).** 34.1M entities across 1,144,776 docs. 19.6 hours, 3.7 GB DB.
-2. **Build search index** — run `build_index` to chunk + embed (BGE-small) all docs into SQLite (FTS5 + sqlite-vec). Enables keyword + semantic + hybrid search. **Next up — sizing test needed first.**
+### Phase 1 — Make the 1.15M docs searchable — DONE (2026-04-29)
+1. ~~**Entity extraction**~~ — **DONE (2026-04-24).** 34.1M entities across 1,144,776 docs. 19.6 hours.
+2. ~~**Build search index**~~ — **DONE (2026-04-29).** Switched from local BGE-small (384-dim, 0.9 docs/s) to Gemini embedding-001 via Vertex AI (768-dim, 11.3 docs/s). 2,866,071 chunks embedded in 22.8 hours. Cost: ~$42 of $1,000 GenAI credit. DB: 20 GB on internal NVMe.
+   - Embedding backend is configurable via `EMBED_BACKEND` env var (`gemini` or `local`)
+   - `build_index --reset` drops chunk/vector tables for re-embedding with a different model
+   - Vertex AI quota: ~10-12 docs/s sustainable; faster triggers per-minute token quota (429s auto-retry)
 
 ### Phase 2 — Build the website
 3. **Next.js frontend** — search/browse UI with entity filters, data set selector, document viewer, timeline view. FastAPI backend is ready. Can start in parallel with Phase 1.

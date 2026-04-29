@@ -27,7 +27,8 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from pipeline.embeddings.local_embedder import LocalEmbedder
+from pipeline.config import config
+from pipeline.embeddings import get_embedder
 from pipeline.local_storage.paths import load_paths
 from pipeline.local_storage.sqlite_store import SQLiteStore
 
@@ -36,16 +37,16 @@ logger = logging.getLogger(__name__)
 # Module-level singletons; populated in the lifespan handler so tests can
 # patch them if needed.
 _store: SQLiteStore | None = None
-_embedder: LocalEmbedder | None = None
+_embedder = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _store, _embedder
     paths = load_paths()
-    _store = SQLiteStore(paths.db_file)
-    _embedder = LocalEmbedder()  # model loads lazily on first /search?type=semantic
-    logger.info("API ready. DB=%s", paths.db_file)
+    _store = SQLiteStore(paths.db_file, embed_dim=config.embed_dim)
+    _embedder = get_embedder()
+    logger.info("API ready. DB=%s, embedder=%s", paths.db_file, config.embed_backend)
     yield
     if _store is not None:
         _store.close()
