@@ -84,12 +84,21 @@ class SQLiteStore:
         conn.execute("PRAGMA synchronous=NORMAL")
         return conn
 
+    def _get_thread_conn(self):
+        """Return a per-thread connection to avoid APSW threading violations."""
+        import threading
+        tid = threading.get_ident()
+        if not hasattr(self, "_thread_conns"):
+            self._thread_conns = {}
+        if tid not in self._thread_conns:
+            conn = self._connect()
+            self._init_schema(conn)
+            self._thread_conns[tid] = conn
+        return self._thread_conns[tid]
+
     @property
     def conn(self):
-        if self._conn is None:
-            self._conn = self._connect()
-            self._init_schema(self._conn)
-        return self._conn
+        return self._get_thread_conn()
 
     def _init_schema(self, conn) -> None:
         conn.execute(f"""
@@ -151,6 +160,42 @@ class SQLiteStore:
             "CREATE INDEX IF NOT EXISTS idx_entities_type_value "
             "ON entities(entity_type, normalized_value);"
         )
+        # Auth + research tables
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                email        TEXT UNIQUE NOT NULL,
+                display_name TEXT,
+                created_at   INTEGER DEFAULT (unixepoch())
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                token      TEXT PRIMARY KEY,
+                user_id    INTEGER NOT NULL REFERENCES users(user_id),
+                expires_at INTEGER NOT NULL
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS notes (
+                note_id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL REFERENCES users(user_id),
+                content    TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER DEFAULT (unixepoch()),
+                UNIQUE(user_id)
+            );
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                bookmark_id  INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL REFERENCES users(user_id),
+                doc_id       TEXT NOT NULL,
+                page_number  INTEGER,
+                note         TEXT DEFAULT '',
+                created_at   INTEGER DEFAULT (unixepoch()),
+                UNIQUE(user_id, doc_id, page_number)
+            );
+        """)
 
     def close(self) -> None:
         if self._conn is not None:
@@ -304,13 +349,17 @@ class SQLiteStore:
         return _rows_as_dicts(cur)
 
     def stats(self) -> dict:
-        def one(sql):
-            return next(iter(self.conn.execute(sql)))[0]
+        def fast_count(table: str) -> int:
+            """Use SQLite's internal row count estimate for large tables."""
+            row = next(iter(self.conn.execute(
+                "SELECT MAX(rowid) FROM " + table
+            )))
+            return row[0] or 0
         return {
-            "documents": one("SELECT COUNT(*) FROM documents"),
-            "pages":     one("SELECT COUNT(*) FROM pages"),
-            "chunks":    one("SELECT COUNT(*) FROM chunks"),
-            "entities":  one("SELECT COUNT(*) FROM entities"),
+            "documents": fast_count("documents"),
+            "pages":     fast_count("pages"),
+            "chunks":    fast_count("chunks"),
+            "entities":  fast_count("entities"),
         }
 
     def existing_doc_ids(self, predicate_sql: str) -> set[str]:
@@ -320,3 +369,78 @@ class SQLiteStore:
             store.existing_doc_ids("SELECT DISTINCT doc_id FROM chunks")
         """
         return {row[0] for row in self.conn.execute(predicate_sql)}
+
+    # ---- auth / users ----
+
+    def get_or_create_user(self, email: str, display_name: str | None = None) -> dict:
+        row = self.conn.execute(
+            "SELECT user_id, email, display_name FROM users WHERE email = ?", (email,)
+        ).fetchone()
+        if row:
+            return {"user_id": row[0], "email": row[1], "display_name": row[2]}
+        self.conn.execute(
+            "INSERT INTO users (email, display_name) VALUES (?, ?)",
+            (email, display_name),
+        )
+        uid = self.conn.last_insert_rowid()
+        return {"user_id": uid, "email": email, "display_name": display_name}
+
+    def create_session(self, user_id: int, token: str, expires_at: int) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
+            (token, user_id, expires_at),
+        )
+
+    def get_session_user(self, token: str) -> dict | None:
+        row = self.conn.execute(
+            """SELECT u.user_id, u.email, u.display_name, s.expires_at
+               FROM sessions s JOIN users u ON u.user_id = s.user_id
+               WHERE s.token = ?""",
+            (token,),
+        ).fetchone()
+        if not row or row[3] < int(__import__("time").time()):
+            return None
+        return {"user_id": row[0], "email": row[1], "display_name": row[2]}
+
+    def delete_session(self, token: str) -> None:
+        self.conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+
+    # ---- notes / bookmarks ----
+
+    def get_notes(self, user_id: int) -> str:
+        row = self.conn.execute(
+            "SELECT content FROM notes WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row[0] if row else ""
+
+    def save_notes(self, user_id: int, content: str) -> None:
+        self.conn.execute(
+            """INSERT INTO notes (user_id, content, updated_at)
+               VALUES (?, ?, unixepoch())
+               ON CONFLICT(user_id) DO UPDATE SET content=excluded.content, updated_at=unixepoch()""",
+            (user_id, content),
+        )
+
+    def get_bookmarks(self, user_id: int) -> list[dict]:
+        cur = self.conn.execute(
+            """SELECT bookmark_id, doc_id, page_number, note, created_at
+               FROM bookmarks WHERE user_id = ? ORDER BY created_at DESC""",
+            (user_id,),
+        )
+        return _rows_as_dicts(cur)
+
+    def add_bookmark(self, user_id: int, doc_id: str, page_number: int | None = None,
+                     note: str = "") -> int:
+        self.conn.execute(
+            """INSERT OR REPLACE INTO bookmarks (user_id, doc_id, page_number, note)
+               VALUES (?, ?, ?, ?)""",
+            (user_id, doc_id, page_number, note),
+        )
+        return self.conn.last_insert_rowid()
+
+    def delete_bookmark(self, user_id: int, bookmark_id: int) -> bool:
+        self.conn.execute(
+            "DELETE FROM bookmarks WHERE bookmark_id = ? AND user_id = ?",
+            (bookmark_id, user_id),
+        )
+        return self.conn.changes() > 0

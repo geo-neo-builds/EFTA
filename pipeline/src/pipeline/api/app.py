@@ -20,12 +20,15 @@ Run locally:
 from __future__ import annotations
 
 import logging
+import secrets
+import time
 from contextlib import asynccontextmanager
 from typing import Literal
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Cookie, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from pipeline.config import config
 from pipeline.embeddings import get_embedder
@@ -62,9 +65,13 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SESSION_DURATION = 30 * 24 * 3600  # 30 days
+MAGIC_LINK_DURATION = 15 * 60      # 15 minutes
 
 
 def _store_or_500() -> SQLiteStore:
@@ -148,23 +155,30 @@ def search(
     q: str | None = Query(None, description="query text; optional if a filter is set"),
     type: Literal["keyword", "semantic", "hybrid"] = "hybrid",
     data_set: int | None = None,
+    doc_type: str | None = Query(None, description="e.g. email, court_filing, transcript"),
     entity_type: str | None = Query(None, description="e.g. PERSON, GPE, ORG"),
     entity_value: str | None = Query(None, description="normalized entity value"),
-    limit: int = Query(20, ge=1, le=100),
+    date_from: str | None = Query(None, description="start date YYYY-MM-DD"),
+    date_to: str | None = Query(None, description="end date YYYY-MM-DD"),
+    limit: int = Query(25, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ):
     """Search chunks by keyword (FTS5), meaning (vectors), or both.
 
-    `entity_type`+`entity_value` together restrict results to docs that
-    contain that specific entity (e.g. type=GPE, value="new york").
-    `data_set` restricts to a specific data set number.
+    Filters: `entity_type`+`entity_value`, `data_set`, `doc_type`,
+    `date_from`/`date_to` (based on DATE entities). All combine with AND.
 
-    If `q` is empty but a filter is set, returns a browse-mode listing
-    of the chunks on pages where that filter matches, so users can
-    explore "all docs mentioning X" without typing a query.
+    If `q` is empty but a filter is set, returns a browse-mode listing.
     """
     store = _store_or_500()
     has_q = bool(q and q.strip())
-    has_filter = bool((entity_type and entity_value) or data_set is not None)
+    has_filter = bool(
+        (entity_type and entity_value)
+        or data_set is not None
+        or doc_type is not None
+        or date_from is not None
+        or date_to is not None
+    )
     if not has_q and not has_filter:
         raise HTTPException(
             400, "Provide a query (q) or a filter (data_set / entity_type+entity_value)."
@@ -191,6 +205,30 @@ def search(
         if not doc_filter:
             return {"query": q or "", "type": type, "results": []}
 
+    if doc_type is not None:
+        rows = store.conn.execute(
+            "SELECT doc_id FROM documents WHERE doc_type = ?", (doc_type,)
+        )
+        dt_ids = {r[0] for r in rows}
+        doc_filter = dt_ids if doc_filter is None else (doc_filter & dt_ids)
+        if not doc_filter:
+            return {"query": q or "", "type": type, "results": []}
+
+    if date_from or date_to:
+        date_sql = "SELECT DISTINCT doc_id FROM entities WHERE entity_type = 'DATE'"
+        date_params: list = []
+        if date_from:
+            date_sql += " AND normalized_value >= ?"
+            date_params.append(date_from)
+        if date_to:
+            date_sql += " AND normalized_value <= ?"
+            date_params.append(date_to)
+        rows = store.conn.execute(date_sql, date_params)
+        dr_ids = {r[0] for r in rows}
+        doc_filter = dr_ids if doc_filter is None else (doc_filter & dr_ids)
+        if not doc_filter:
+            return {"query": q or "", "type": type, "results": []}
+
     # Filter-only browse mode: no query, just list chunks matching the filter.
     if not has_q:
         return {
@@ -203,8 +241,8 @@ def search(
 
     results: list[dict] = []
 
-    # Fetch a generous pool then filter by doc_filter and trim to limit.
-    pool = limit * 5 if doc_filter else limit
+    # Fetch a generous pool then filter by doc_filter and apply offset+limit.
+    pool = (limit + offset) * 5 if doc_filter else (limit + offset)
 
     if type in ("keyword", "hybrid"):
         for row in store.keyword_search(q, limit=pool):
@@ -246,7 +284,7 @@ def search(
         seen.add(r["chunk_id"])
         deduped.append(r)
 
-    return {"query": q, "type": type, "results": deduped[:limit]}
+    return {"query": q, "type": type, "results": deduped[offset:offset + limit]}
 
 
 @app.get("/doc/{doc_id}")
@@ -350,32 +388,199 @@ def similar_chunks(chunk_id: int, limit: int = Query(10, ge=1, le=50)):
 
 @app.get("/facets")
 def facets(top_n: int = Query(25, ge=1, le=200)):
-    """Return top filter values per entity type for UI faceting."""
-    store = _store_or_500()
-    c = store.conn
+    """Return facets for the UI filter sidebar.
 
-    data_sets = [r[0] for r in c.execute(
-        "SELECT DISTINCT data_set FROM documents ORDER BY data_set"
-    )]
-    entity_types = [r[0] for r in c.execute(
-        "SELECT DISTINCT entity_type FROM entities ORDER BY entity_type"
-    )]
-    top_by_type: dict[str, list[dict]] = {}
-    for et in entity_types:
-        rows = c.execute(
-            """SELECT normalized_value, COUNT(DISTINCT doc_id) AS doc_count
-               FROM entities WHERE entity_type = ?
-               GROUP BY normalized_value
-               ORDER BY doc_count DESC, normalized_value ASC
-               LIMIT ?""",
-            (et, top_n),
-        )
-        top_by_type[et] = [
-            {"value": r[0], "doc_count": r[1]} for r in rows
-        ]
-
+    Entity top-by-type queries are too slow on 34M rows for real-time use,
+    so we return static lists for data_sets/doc_types/entity_types and
+    skip the per-type top values. The sidebar uses these for filter buttons.
+    """
     return {
-        "data_sets": data_sets,
-        "entity_types": entity_types,
-        "top_by_type": top_by_type,
+        "data_sets": [8, 9, 10, 11],
+        "doc_types": [
+            "calendar_event", "court_filing", "court_order", "email",
+            "evidence_log", "fbi_report", "financial", "letter", "memo",
+            "other", "police_report", "transcript", "witness_form",
+        ],
+        "entity_types": [
+            "DATE", "EMAIL", "EVENT", "FAC", "GPE", "LOC",
+            "MONEY", "NORP", "ORG", "PERSON", "PHONE",
+        ],
+        "top_by_type": {},
     }
+
+
+# ---------- auth ----------
+
+# In-memory store for magic link tokens (token → {email, expires_at}).
+# Good enough for local dev; production should use the DB.
+_magic_tokens: dict[str, dict] = {}
+
+
+def _current_user(session: str | None) -> dict | None:
+    if not session:
+        return None
+    store = _store_or_500()
+    return store.get_session_user(session)
+
+
+def _require_user(session: str | None = Cookie(None)) -> dict:
+    user = _current_user(session)
+    if user is None:
+        raise HTTPException(401, "Not authenticated")
+    return user
+
+
+class MagicLinkRequest(BaseModel):
+    email: str
+
+
+@app.post("/auth/magic-link")
+def send_magic_link(body: MagicLinkRequest):
+    """Send a magic login link to the given email via Resend."""
+    import resend
+
+    resend.api_key = config.resend_api_key
+    if not resend.api_key:
+        raise HTTPException(500, "RESEND_API_KEY not configured")
+
+    token = secrets.token_urlsafe(48)
+    _magic_tokens[token] = {
+        "email": body.email.lower().strip(),
+        "expires_at": int(time.time()) + MAGIC_LINK_DURATION,
+    }
+    verify_url = f"http://localhost:3000/auth/verify?token={token}"
+    resend.Emails.send({
+        "from": "EFTA <login@eftanow.com>",
+        "to": [body.email],
+        "subject": "Your EFTA login link",
+        "html": f'<p>Click to sign in to EFTA:</p><p><a href="{verify_url}">{verify_url}</a></p><p>This link expires in 15 minutes.</p>',
+    })
+    return {"ok": True}
+
+
+@app.get("/auth/verify")
+def verify_magic_link(token: str, response: Response):
+    """Verify a magic link token and create a session."""
+    entry = _magic_tokens.pop(token, None)
+    if not entry or entry["expires_at"] < int(time.time()):
+        raise HTTPException(400, "Invalid or expired link")
+
+    store = _store_or_500()
+    user = store.get_or_create_user(entry["email"])
+    session_token = secrets.token_urlsafe(48)
+    store.create_session(user["user_id"], session_token, int(time.time()) + SESSION_DURATION)
+    response.set_cookie(
+        "session", session_token, httponly=True, samesite="lax",
+        max_age=SESSION_DURATION,
+    )
+    return {"ok": True, "user": user}
+
+
+@app.get("/auth/me")
+def auth_me(session: str | None = Cookie(None)):
+    """Return the current user, or null if not logged in."""
+    user = _current_user(session)
+    return {"user": user}
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response, session: str | None = Cookie(None)):
+    if session:
+        store = _store_or_500()
+        store.delete_session(session)
+    response.delete_cookie("session")
+    return {"ok": True}
+
+
+# ---------- notes / bookmarks ----------
+
+
+class NotesUpdate(BaseModel):
+    content: str
+
+
+class BookmarkCreate(BaseModel):
+    doc_id: str
+    page_number: int | None = None
+    note: str = ""
+
+
+@app.get("/notes")
+def get_notes(session: str | None = Cookie(None)):
+    user = _require_user(session)
+    store = _store_or_500()
+    return {"content": store.get_notes(user["user_id"])}
+
+
+@app.put("/notes")
+def save_notes(body: NotesUpdate, session: str | None = Cookie(None)):
+    user = _require_user(session)
+    store = _store_or_500()
+    store.save_notes(user["user_id"], body.content)
+    return {"ok": True}
+
+
+@app.get("/bookmarks")
+def get_bookmarks(session: str | None = Cookie(None)):
+    user = _require_user(session)
+    store = _store_or_500()
+    return {"bookmarks": store.get_bookmarks(user["user_id"])}
+
+
+@app.post("/bookmarks")
+def add_bookmark(body: BookmarkCreate, session: str | None = Cookie(None)):
+    user = _require_user(session)
+    store = _store_or_500()
+    bid = store.add_bookmark(user["user_id"], body.doc_id, body.page_number, body.note)
+    return {"ok": True, "bookmark_id": bid}
+
+
+@app.delete("/bookmarks/{bookmark_id}")
+def delete_bookmark(bookmark_id: int, session: str | None = Cookie(None)):
+    user = _require_user(session)
+    store = _store_or_500()
+    if not store.delete_bookmark(user["user_id"], bookmark_id):
+        raise HTTPException(404, "Bookmark not found")
+    return {"ok": True}
+
+
+# ---------- timeline ----------
+
+
+@app.get("/timeline")
+def timeline(
+    data_set: int | None = None,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Return documents grouped by extracted DATE entities, sorted chronologically."""
+    store = _store_or_500()
+    ds_clause = "AND e.doc_id IN (SELECT doc_id FROM documents WHERE data_set = ?)" if data_set else ""
+    params: list = ["DATE"]
+    if data_set:
+        params.append(data_set)
+    params.extend([limit, offset])
+
+    rows = store.conn.execute(
+        f"""SELECT e.normalized_value AS date_val,
+                   COUNT(DISTINCT e.doc_id) AS doc_count,
+                   GROUP_CONCAT(DISTINCT e.doc_id) AS doc_ids
+            FROM entities e
+            WHERE e.entity_type = ? {ds_clause}
+            GROUP BY e.normalized_value
+            HAVING LENGTH(e.normalized_value) >= 8
+            ORDER BY e.normalized_value
+            LIMIT ? OFFSET ?""",
+        params,
+    )
+
+    entries = []
+    for row in rows:
+        doc_id_list = row[2].split(",")[:10] if row[2] else []
+        entries.append({
+            "date": row[0],
+            "doc_count": row[1],
+            "doc_ids": doc_id_list,
+        })
+
+    return {"entries": entries, "limit": limit, "offset": offset}

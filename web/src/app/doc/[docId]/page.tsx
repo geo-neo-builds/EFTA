@@ -7,10 +7,12 @@ import {
   DocumentMeta,
   EntitiesResponse,
   PageText,
+  addBookmark,
   getDocument,
   getDocumentEntities,
   getDocumentPage,
 } from "@/lib/api";
+import { useUser } from "@/lib/auth";
 
 export default function DocumentPage() {
   const params = useParams<{ docId: string }>();
@@ -24,6 +26,8 @@ export default function DocumentPage() {
   const [currentPage, setCurrentPage] = useState<number>(initialPage);
   const [pageText, setPageText] = useState<PageText | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [bookmarked, setBookmarked] = useState(false);
+  const { user } = useUser();
 
   useEffect(() => {
     setError(null);
@@ -55,9 +59,9 @@ export default function DocumentPage() {
       <section>
         <header className="mb-4">
           <div className="text-xs text-zinc-500 dark:text-zinc-400 mb-1">
-            <Link href="/" className="hover:underline">
+            <button onClick={() => window.history.back()} className="hover:underline">
               ← all results
-            </Link>
+            </button>
             <span className="mx-2">·</span>
             Data Set {meta.data_set}
           </div>
@@ -66,14 +70,33 @@ export default function DocumentPage() {
             {meta.filename} · {meta.page_count} pages ·{" "}
             {meta.total_chars.toLocaleString()} chars
           </p>
-          <a
-            href={meta.source_url}
-            target="_blank"
-            rel="noreferrer"
-            className="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 underline"
-          >
-            View original PDF on justice.gov
-          </a>
+          <div className="flex items-center gap-3 mt-1">
+            <a
+              href={meta.source_url}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 underline"
+            >
+              View original PDF on justice.gov
+            </a>
+            {user && (
+              <button
+                onClick={async () => {
+                  await addBookmark(docId, currentPage);
+                  setBookmarked(true);
+                  window.dispatchEvent(new Event("efta-bookmark-added"));
+                  setTimeout(() => setBookmarked(false), 2000);
+                }}
+                className={`text-xs px-2 py-0.5 rounded ${
+                  bookmarked
+                    ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300"
+                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700"
+                }`}
+              >
+                {bookmarked ? "Bookmarked!" : `Bookmark p.${currentPage}`}
+              </button>
+            )}
+          </div>
         </header>
 
         <PageNav

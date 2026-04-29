@@ -1,76 +1,184 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   FacetsResponse,
   SearchHit,
   SearchType,
+  SimilarHit,
   Stats,
+  addBookmark,
   getFacets,
+  getSimilar,
   getStats,
   search,
 } from "@/lib/api";
+import { useUser } from "@/lib/auth";
 
 type EntityFilter = { type: string; value: string } | null;
 
+import { Suspense } from "react";
+
 export default function HomePage() {
-  const [query, setQuery] = useState("");
-  const [searchType, setSearchType] = useState<SearchType>("hybrid");
-  const [entityFilter, setEntityFilter] = useState<EntityFilter>(null);
-  const [dataSet, setDataSet] = useState<number | null>(null);
+  return (
+    <Suspense fallback={<p className="text-zinc-400">Loading...</p>}>
+      <HomeContent />
+    </Suspense>
+  );
+}
+
+function HomeContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const initDone = useRef(false);
+
+  // Initialize state from URL params
+  const [query, setQuery] = useState(searchParams.get("q") ?? "");
+  const [searchType, setSearchType] = useState<SearchType>(
+    (searchParams.get("type") as SearchType) || "hybrid",
+  );
+  const [entityFilter, setEntityFilter] = useState<EntityFilter>(() => {
+    const et = searchParams.get("entity_type");
+    const ev = searchParams.get("entity_value");
+    return et && ev ? { type: et, value: ev } : null;
+  });
+  const [dataSet, setDataSet] = useState<number | null>(() => {
+    const ds = searchParams.get("data_set");
+    return ds ? Number(ds) : null;
+  });
+  const [docType, setDocType] = useState<string | null>(
+    searchParams.get("doc_type"),
+  );
+  const [dateFrom, setDateFrom] = useState(searchParams.get("date_from") ?? "");
+  const [dateTo, setDateTo] = useState(searchParams.get("date_to") ?? "");
 
   const [results, setResults] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const PAGE_SIZE = 25;
 
   const [stats, setStats] = useState<Stats | null>(null);
   const [facets, setFacets] = useState<FacetsResponse | null>(null);
+  const [similarMode, setSimilarMode] = useState<{ chunkId: number; hits: SimilarHit[] } | null>(null);
+  const { user } = useUser();
+
+  // Sync state → URL (without triggering navigation/reload)
+  const syncUrl = useCallback(
+    (q: string, st: SearchType, ef: EntityFilter, ds: number | null,
+     dt: string | null, df: string, dTo: string) => {
+      const params = new URLSearchParams();
+      if (q.trim()) params.set("q", q.trim());
+      if (st !== "hybrid") params.set("type", st);
+      if (ef) {
+        params.set("entity_type", ef.type);
+        params.set("entity_value", ef.value);
+      }
+      if (ds !== null) params.set("data_set", String(ds));
+      if (dt) params.set("doc_type", dt);
+      if (df) params.set("date_from", df);
+      if (dTo) params.set("date_to", dTo);
+      const qs = params.toString();
+      router.replace(qs ? `/?${qs}` : "/", { scroll: false });
+    },
+    [router],
+  );
 
   useEffect(() => {
     getStats().then(setStats).catch(() => {});
     getFacets(20).then(setFacets).catch(() => {});
   }, []);
 
-  async function runSearch(e?: React.FormEvent) {
+  const doSearch = useCallback(
+    async (q: string, st: SearchType, ef: EntityFilter, ds: number | null,
+           dt: string | null, df: string, dTo: string) => {
+      const hasFilter = ef !== null || ds !== null || dt !== null || !!df || !!dTo;
+      if (!q.trim() && !hasFilter) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await search({
+          q: q.trim() || undefined,
+          type: st,
+          data_set: ds ?? undefined,
+          doc_type: dt ?? undefined,
+          entity_type: ef?.type,
+          entity_value: ef?.value,
+          date_from: df || undefined,
+          date_to: dTo || undefined,
+          limit: PAGE_SIZE,
+        });
+        setResults(res.results);
+        setHasSearched(true);
+        setHasMore(res.results.length === PAGE_SIZE);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+        setResults([]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
+
+  // On initial load: if URL has search params, auto-run the search
+  useEffect(() => {
+    if (initDone.current) return;
+    initDone.current = true;
+    const hasFilter = entityFilter !== null || dataSet !== null || docType !== null || !!dateFrom || !!dateTo;
+    if (query.trim() || hasFilter) {
+      doSearch(query, searchType, entityFilter, dataSet, docType, dateFrom, dateTo);
+    }
+  }, [query, searchType, entityFilter, dataSet, docType, dateFrom, dateTo, doSearch]);
+
+  function runSearch(e?: React.FormEvent) {
     e?.preventDefault();
-    const hasFilter = entityFilter !== null || dataSet !== null;
-    if (!query.trim() && !hasFilter) return;
-    setLoading(true);
-    setError(null);
+    syncUrl(query, searchType, entityFilter, dataSet, docType, dateFrom, dateTo);
+    doSearch(query, searchType, entityFilter, dataSet, docType, dateFrom, dateTo);
+  }
+
+  async function loadMore() {
+    setLoadingMore(true);
     try {
       const res = await search({
         q: query.trim() || undefined,
         type: searchType,
         data_set: dataSet ?? undefined,
+        doc_type: docType ?? undefined,
         entity_type: entityFilter?.type,
         entity_value: entityFilter?.value,
-        limit: 25,
+        date_from: dateFrom || undefined,
+        date_to: dateTo || undefined,
+        limit: PAGE_SIZE,
+        offset: results.length,
       });
-      setResults(res.results);
-      setHasSearched(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setResults([]);
+      setResults((prev) => [...prev, ...res.results]);
+      setHasMore(res.results.length === PAGE_SIZE);
+    } catch {
     } finally {
-      setLoading(false);
+      setLoadingMore(false);
     }
   }
 
-  // Auto-fire when a filter is toggled (entity or data_set). The search
-  // form still handles typed queries via onSubmit.
+  // Auto-fire when a filter is toggled
   useEffect(() => {
-    const hasFilter = entityFilter !== null || dataSet !== null;
+    if (!initDone.current) return;
+    const hasFilter = entityFilter !== null || dataSet !== null || docType !== null || !!dateFrom || !!dateTo;
     if (!hasFilter && !hasSearched) return;
     if (!hasFilter && !query.trim()) {
       setResults([]);
       setHasSearched(false);
+      syncUrl("", searchType, null, null, null, "", "");
       return;
     }
-    runSearch();
+    syncUrl(query, searchType, entityFilter, dataSet, docType, dateFrom, dateTo);
+    doSearch(query, searchType, entityFilter, dataSet, docType, dateFrom, dateTo);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [entityFilter, dataSet]);
+  }, [entityFilter, dataSet, docType, dateFrom, dateTo]);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-8">
@@ -91,6 +199,53 @@ export default function HomePage() {
             <p className="text-sm text-zinc-400 dark:text-zinc-500">loading…</p>
           )}
         </section>
+
+        {/* Doc type filter */}
+        {facets?.doc_types && facets.doc_types.length > 0 && (
+          <FilterSection
+            title="Document type"
+            clearLabel={docType ? "clear" : undefined}
+            onClear={() => setDocType(null)}
+          >
+            {facets.doc_types.map((dt) => (
+              <button
+                key={dt}
+                onClick={() => setDocType(docType === dt ? null : dt)}
+                className={`block w-full text-left text-sm px-2 py-1 rounded capitalize ${
+                  docType === dt
+                    ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                    : "hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300"
+                }`}
+              >
+                {dt.replace(/_/g, " ")}
+              </button>
+            ))}
+          </FilterSection>
+        )}
+
+        {/* Date range filter */}
+        <FilterSection
+          title="Date range"
+          clearLabel={dateFrom || dateTo ? "clear" : undefined}
+          onClear={() => { setDateFrom(""); setDateTo(""); }}
+        >
+          <div className="space-y-1.5">
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="block w-full rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300"
+              placeholder="From"
+            />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="block w-full rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-2 py-1 text-xs text-zinc-700 dark:text-zinc-300"
+              placeholder="To"
+            />
+          </div>
+        </FilterSection>
 
         <FilterSection
           title="Data set"
@@ -187,12 +342,24 @@ export default function HomePage() {
               </label>
             ))}
           </div>
-          {(entityFilter || dataSet !== null) && (
+          {(entityFilter || dataSet !== null || docType || dateFrom || dateTo) && (
             <div className="flex gap-2 flex-wrap text-xs">
               {dataSet !== null && (
                 <ActiveChip
                   label={`Set ${dataSet}`}
                   onClear={() => setDataSet(null)}
+                />
+              )}
+              {docType && (
+                <ActiveChip
+                  label={`Type: ${docType.replace(/_/g, " ")}`}
+                  onClear={() => setDocType(null)}
+                />
+              )}
+              {(dateFrom || dateTo) && (
+                <ActiveChip
+                  label={`Date: ${dateFrom || "..."} – ${dateTo || "..."}`}
+                  onClear={() => { setDateFrom(""); setDateTo(""); }}
                 />
               )}
               {entityFilter && (
@@ -221,10 +388,33 @@ export default function HomePage() {
           <p className="text-sm text-zinc-500 dark:text-zinc-400">No results.</p>
         )}
 
+        {similarMode && (
+          <div className="mb-4">
+            <button
+              onClick={() => setSimilarMode(null)}
+              className="text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+            >
+              &larr; Back to search results
+            </button>
+            <h3 className="mt-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+              Documents similar to chunk #{similarMode.chunkId}
+            </h3>
+          </div>
+        )}
+
         <ul className="space-y-3">
-          {results.map((hit) => {
-            // Prefer the typed query; fall back to the entity value so the
-            // doc page can highlight the facet hit even in filter mode.
+          {(similarMode
+            ? similarMode.hits.map((h) => ({
+                chunk_id: h.chunk_id,
+                doc_id: h.doc_id,
+                page_number: h.page_number,
+                sub_chunk_index: h.sub_chunk_index,
+                snippet: h.preview,
+                score: h.distance,
+                match: "semantic" as const,
+              }))
+            : results
+          ).map((hit) => {
             const hl =
               query.trim() || entityFilter?.value || "";
             const href =
@@ -254,10 +444,52 @@ export default function HomePage() {
                     dangerouslySetInnerHTML={{ __html: hit.snippet }}
                   />
                 </Link>
+                <div className="mt-1.5 flex gap-2">
+                  <button
+                    onClick={async (e) => {
+                      e.preventDefault();
+                      const res = await getSimilar(hit.chunk_id, 10);
+                      setSimilarMode({ chunkId: hit.chunk_id, hits: res.results });
+                    }}
+                    className="text-xs text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                  >
+                    Similar
+                  </button>
+                  {user && (
+                    <button
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        await addBookmark(hit.doc_id, hit.page_number);
+                        window.dispatchEvent(new Event("efta-bookmark-added"));
+                      }}
+                      className="text-xs text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+                    >
+                      Bookmark
+                    </button>
+                  )}
+                </div>
               </li>
             );
           })}
         </ul>
+
+        {hasMore && !similarMode && (
+          <div className="mt-4 text-center">
+            <button
+              onClick={loadMore}
+              disabled={loadingMore}
+              className="rounded bg-zinc-100 px-6 py-2 text-sm text-zinc-700 hover:bg-zinc-200 disabled:opacity-50 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+            >
+              {loadingMore ? "Loading..." : "Load more results"}
+            </button>
+          </div>
+        )}
+
+        {hasSearched && results.length > 0 && (
+          <p className="mt-3 text-center text-xs text-zinc-400">
+            Showing {results.length} result{results.length !== 1 ? "s" : ""}
+          </p>
+        )}
       </section>
     </div>
   );

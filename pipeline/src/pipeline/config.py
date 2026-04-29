@@ -26,6 +26,9 @@ class Config:
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     embed_backend: str = os.getenv("EMBED_BACKEND", "gemini")  # "gemini" | "local"
     embed_dim: int = int(os.getenv("EMBED_DIM", "768"))
+    # Auth
+    resend_api_key: str = os.getenv("RESEND_API_KEY", "")
+    session_secret: str = os.getenv("SESSION_SECRET", "change-me-in-prod")
 
 
 config = Config()
